@@ -1,10 +1,11 @@
 "use client";
 
 import { FC, useState, useEffect } from 'react';
-import { Plus, Trash2, Save, Edit, Check, Zap, Loader2 } from 'lucide-react';
-import { AIProvider, ProxySettings } from '../types';
+import { Plus, Trash2, Save, Edit, Check, Zap, Loader2, Settings } from 'lucide-react';
+import { AIProvider, ProxySettings, AIModel } from '../types';
 import { storageService } from '../services/storage';
 import { aiService } from '../services/ai';
+import { logService } from '../services/log';
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -33,7 +34,8 @@ const SettingsInterface: FC = () => {
     id: '',
     name: '',
     apiEndpoint: '',
-    apiKey: ''
+    apiKey: '',
+    models: [],
   });
   
   // 编辑状态跟踪
@@ -56,49 +58,110 @@ const SettingsInterface: FC = () => {
   // 测试连接状态
   const [testingProvider, setTestingProvider] = useState<string | null>(null);
   
+  // 模型管理对话框状态
+  const [modelDialogOpen, setModelDialogOpen] = useState(false);
+  const [currentProvider, setCurrentProvider] = useState<string | null>(null);
+  const [newModel, setNewModel] = useState<AIModel>({
+    id: '',
+    name: '',
+    parameters: {},
+  });
+  
   // 从存储服务加载设置
   useEffect(() => {
     // 加载AI提供商
     const savedProviders = storageService.getProviders();
     if (savedProviders.length > 0) {
-      setProviders(savedProviders);
+      // 确保所有提供商都有models字段
+      const updatedProviders = savedProviders.map(provider => ({
+        ...provider,
+        models: provider.models || [
+          { id: 'default', name: 'Default Model' }
+        ]
+      }));
+      setProviders(updatedProviders);
+      logService.info(`已加载 ${savedProviders.length} 个AI提供商`);
     } else {
       // 设置默认提供商
       setProviders([{
         id: '1',
         name: 'ChatGPT',
         apiEndpoint: 'https://api.openai.com/v1/chat/completions',
-        apiKey: ''
+        apiKey: '',
+        models: [
+          { id: 'gpt-3.5-turbo', name: 'GPT-3.5 Turbo' },
+          { id: 'gpt-4', name: 'GPT-4' }
+        ],
+        defaultModelId: 'gpt-3.5-turbo'
       }]);
+      logService.info('使用默认AI提供商');
     }
     
     // 加载代理设置
     const savedProxy = storageService.getProxySettings();
     setProxySettings(savedProxy);
+    logService.info(`已加载代理设置，代理状态: ${savedProxy.enabled ? '启用' : '禁用'}`);
   }, []);
   
   // 添加新的AI提供商
   const handleAddProvider = () => {
     if (!newProvider.name || !newProvider.apiEndpoint) {
       toast.error('提供商名称和API端点不能为空');
+      logService.warn('添加提供商失败：名称或API端点为空');
       return;
     }
     
     const newId = Date.now().toString();
+    
+    // 预设模型列表
+    let presetModels: AIModel[] = [];
+    
+    // 根据提供商名称预设模型
+    if (newProvider.name.toLowerCase().includes('openai') || newProvider.name.toLowerCase().includes('chatgpt')) {
+      presetModels = [
+        { id: 'gpt-3.5-turbo', name: 'GPT-3.5 Turbo' },
+        { id: 'gpt-4', name: 'GPT-4' },
+        { id: 'gpt-4-turbo', name: 'GPT-4 Turbo' }
+      ];
+    } else if (newProvider.name.toLowerCase().includes('deepseek')) {
+      // 使用DeepSeek API文档中指定的标准模型名称
+      presetModels = [
+        { id: 'deepseek-chat', name: 'DeepSeek-V3' },
+        { id: 'deepseek-reasoner', name: 'DeepSeek-R1' }
+      ];
+      
+      // 确保API端点正确
+      if (!newProvider.apiEndpoint || !newProvider.apiEndpoint.includes('api.deepseek.com')) {
+        newProvider.apiEndpoint = 'https://api.deepseek.com/chat/completions';
+        logService.info('自动设置DeepSeek API端点');
+      }
+    } else if (newProvider.name.toLowerCase().includes('claude') || newProvider.name.toLowerCase().includes('anthropic')) {
+      presetModels = [
+        { id: 'claude-3-opus-20240229', name: 'Claude 3 Opus' },
+        { id: 'claude-3-sonnet-20240229', name: 'Claude 3 Sonnet' },
+        { id: 'claude-3-haiku-20240307', name: 'Claude 3 Haiku' }
+      ];
+    }
+    
     const updatedProviders = [...providers, {
       ...newProvider,
-      id: newId
+      id: newId,
+      models: presetModels.length > 0 ? presetModels : [{ id: 'default', name: '默认模型' }],
+      defaultModelId: presetModels.length > 0 ? presetModels[0].id : 'default'
     }];
     
     setProviders(updatedProviders);
     storageService.saveProviders(updatedProviders);
+    
+    logService.info(`已添加新AI提供商: ${newProvider.name}，预设了 ${presetModels.length} 个模型`);
     
     // 重置表单
     setNewProvider({
       id: '',
       name: '',
       apiEndpoint: '',
-      apiKey: ''
+      apiKey: '',
+      models: [],
     });
     
     toast.success('新的AI提供商已添加');
@@ -110,9 +173,14 @@ const SettingsInterface: FC = () => {
       // 保存更改
       storageService.saveProviders(providers);
       setEditingProviderId(null);
+      
+      const provider = providers.find(p => p.id === id);
+      logService.info(`已更新AI提供商: ${provider?.name}`);
+      
       toast.success('AI提供商已更新');
     } else {
       setEditingProviderId(id);
+      logService.debug(`开始编辑提供商 ID: ${id}`);
     }
   };
   
@@ -120,15 +188,22 @@ const SettingsInterface: FC = () => {
   const openDeleteDialog = (id: string) => {
     setProviderToDelete(id);
     setDeleteDialogOpen(true);
+    
+    const provider = providers.find(p => p.id === id);
+    logService.debug(`准备删除提供商: ${provider?.name}`);
   };
   
   // 删除AI提供商
   const handleDeleteProvider = () => {
     if (!providerToDelete) return;
     
+    const providerToRemove = providers.find(p => p.id === providerToDelete);
     const updatedProviders = providers.filter(provider => provider.id !== providerToDelete);
+    
     setProviders(updatedProviders);
     storageService.saveProviders(updatedProviders);
+    
+    logService.info(`已删除AI提供商: ${providerToRemove?.name}`);
     toast.success('AI提供商已删除');
     
     // 关闭对话框并重置状态
@@ -154,16 +229,23 @@ const SettingsInterface: FC = () => {
   const handleTestConnection = async (id: string) => {
     setTestingProvider(id);
     
+    const provider = providers.find(p => p.id === id);
+    logService.info(`测试连接到: ${provider?.name}`);
+    
     try {
       const result = await aiService.testConnection(id);
       
       if (result.success) {
+        logService.info(`连接测试成功: ${result.message}`);
         toast.success(result.message);
       } else {
+        logService.error(`连接测试失败: ${result.message}`);
         toast.error(result.message);
       }
     } catch (error) {
-      toast.error(`测试连接出错: ${error instanceof Error ? error.message : '未知错误'}`);
+      const errorMsg = `测试连接出错: ${error instanceof Error ? error.message : '未知错误'}`;
+      logService.error(errorMsg);
+      toast.error(errorMsg);
     } finally {
       setTestingProvider(null);
     }
@@ -175,7 +257,114 @@ const SettingsInterface: FC = () => {
     storageService.saveProviders(providers);
     storageService.saveProxySettings(proxySettings);
     
+    // 如果有正在编辑的提供商，退出编辑模式
+    if (editingProviderId) {
+      setEditingProviderId(null);
+    }
+    
+    logService.info('所有设置已保存');
+    logService.debug(`保存了 ${providers.length} 个AI提供商和代理设置(${proxySettings.enabled ? '启用' : '禁用'})`);
+    
     toast.success('设置已保存');
+  };
+  
+  // 打开模型管理对话框
+  const openModelDialog = (providerId: string) => {
+    setCurrentProvider(providerId);
+    setModelDialogOpen(true);
+    
+    const provider = providers.find(p => p.id === providerId);
+    logService.debug(`打开提供商 ${provider?.name} 的模型管理`);
+  };
+  
+  // 添加新模型
+  const handleAddModel = () => {
+    if (!currentProvider || !newModel.name) {
+      toast.error('模型名称不能为空');
+      return;
+    }
+    
+    const newModelId = Date.now().toString();
+    const updatedProviders = providers.map(provider => {
+      if (provider.id === currentProvider) {
+        // 如果这是第一个添加的模型，设为默认
+        const isFirstModel = !provider.models || provider.models.length === 0;
+        
+        return {
+          ...provider,
+          models: [
+            ...(provider.models || []),
+            { ...newModel, id: newModelId }
+          ],
+          defaultModelId: isFirstModel ? newModelId : provider.defaultModelId
+        };
+      }
+      return provider;
+    });
+    
+    setProviders(updatedProviders);
+    storageService.saveProviders(updatedProviders);
+    
+    // 重置表单
+    setNewModel({
+      id: '',
+      name: '',
+      parameters: {}
+    });
+    
+    toast.success('新的模型已添加');
+    logService.info(`已添加新模型: ${newModel.name}`);
+  };
+  
+  // 设置默认模型
+  const handleSetDefaultModel = (providerId: string, modelId: string) => {
+    const updatedProviders = providers.map(provider => {
+      if (provider.id === providerId) {
+        return { ...provider, defaultModelId: modelId };
+      }
+      return provider;
+    });
+    
+    setProviders(updatedProviders);
+    storageService.saveProviders(updatedProviders);
+    
+    const provider = providers.find(p => p.id === providerId);
+    const model = provider?.models.find(m => m.id === modelId);
+    logService.info(`已将 ${model?.name} 设为 ${provider?.name} 的默认模型`);
+    
+    toast.success('默认模型已更新');
+  };
+  
+  // 删除模型
+  const handleDeleteModel = (providerId: string, modelId: string) => {
+    const provider = providers.find(p => p.id === providerId);
+    if (!provider || provider.models.length <= 1) {
+      toast.error('至少保留一个模型');
+      return;
+    }
+    
+    // 检查是否删除的是默认模型
+    const isDefaultModel = provider.defaultModelId === modelId;
+    
+    const updatedProviders = providers.map(p => {
+      if (p.id === providerId) {
+        const updatedModels = p.models.filter(m => m.id !== modelId);
+        return {
+          ...p,
+          models: updatedModels,
+          // 如果删除的是默认模型，则选择第一个模型作为新的默认模型
+          defaultModelId: isDefaultModel ? updatedModels[0]?.id : p.defaultModelId
+        };
+      }
+      return p;
+    });
+    
+    setProviders(updatedProviders);
+    storageService.saveProviders(updatedProviders);
+    
+    const model = provider.models.find(m => m.id === modelId);
+    logService.info(`已删除模型: ${model?.name}`);
+    toast.success('模型已删除');
   };
 
   return (
@@ -215,6 +404,7 @@ const SettingsInterface: FC = () => {
                           className="cursor-pointer"
                         >
                           <Check size={16} />
+                          <span className="ml-1">保存</span>
                         </Button>
                       ) : (
                         <>
@@ -225,6 +415,7 @@ const SettingsInterface: FC = () => {
                             className="cursor-pointer"
                           >
                             <Edit size={16} />
+                            <span className="ml-1">编辑</span>
                           </Button>
                           <Button 
                             onClick={() => openDeleteDialog(provider.id)}
@@ -233,6 +424,7 @@ const SettingsInterface: FC = () => {
                             className="text-destructive cursor-pointer"
                           >
                             <Trash2 size={16} />
+                            <span className="ml-1">删除</span>
                           </Button>
                           <Button 
                             onClick={() => handleTestConnection(provider.id)}
@@ -246,6 +438,16 @@ const SettingsInterface: FC = () => {
                             ) : (
                               <Zap size={16} />
                             )}
+                            <span className="ml-1">测试</span>
+                          </Button>
+                          <Button 
+                            onClick={() => openModelDialog(provider.id)}
+                            variant="outline"
+                            size="sm"
+                            className="text-green-500 cursor-pointer"
+                          >
+                            <Settings size={16} />
+                            <span className="ml-1">模型</span>
                           </Button>
                         </>
                       )}
@@ -260,8 +462,8 @@ const SettingsInterface: FC = () => {
                         type="text"
                         value={provider.apiEndpoint}
                         onChange={(e) => handleUpdateProvider(provider.id, 'apiEndpoint', e.target.value)}
-                        disabled={editingProviderId !== provider.id && editingProviderId !== null}
-                        className={editingProviderId !== provider.id && editingProviderId !== null ? "opacity-75" : ""}
+                        disabled={editingProviderId !== provider.id}
+                        className={`${editingProviderId !== provider.id ? "opacity-75 bg-muted" : ""}`}
                       />
                     </div>
                     
@@ -269,12 +471,25 @@ const SettingsInterface: FC = () => {
                       <Label htmlFor={`api-key-${provider.id}`} className="block mb-1">API密钥</Label>
                       <Input
                         id={`api-key-${provider.id}`}
-                        type="password"
-                        value={provider.apiKey}
+                        type={editingProviderId === provider.id ? "text" : "password"}
+                        value={provider.apiKey ? (editingProviderId !== provider.id ? "••••••••••••••••" : provider.apiKey) : ""}
                         onChange={(e) => handleUpdateProvider(provider.id, 'apiKey', e.target.value)}
-                        disabled={editingProviderId !== provider.id && editingProviderId !== null}
-                        className={editingProviderId !== provider.id && editingProviderId !== null ? "opacity-75" : ""}
+                        disabled={editingProviderId !== provider.id}
+                        className={`${editingProviderId !== provider.id ? "opacity-75 bg-muted" : ""}`}
+                        placeholder={editingProviderId === provider.id ? "输入API密钥" : ""}
                       />
+                    </div>
+                    
+                    <div>
+                      <Label className="block mb-1">默认模型</Label>
+                      <div className="text-sm text-gray-500">
+                        {provider.models && provider.models.length > 0 ? (
+                          provider.models.find(m => m.id === provider.defaultModelId)?.name || 
+                          provider.models[0].name
+                        ) : (
+                          "未设置模型"
+                        )}
+                      </div>
                     </div>
                   </div>
                 </CardContent>
@@ -438,6 +653,74 @@ const SettingsInterface: FC = () => {
             <Button variant="outline" onClick={() => setDeleteDialogOpen(false)}>取消</Button>
             <Button variant="destructive" onClick={handleDeleteProvider}>删除</Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      
+      {/* 模型管理对话框 */}
+      <Dialog open={modelDialogOpen} onOpenChange={setModelDialogOpen}>
+        <DialogContent className="sm:max-w-[500px]">
+          <DialogHeader>
+            <DialogTitle>模型管理</DialogTitle>
+          </DialogHeader>
+          
+          {currentProvider && (
+            <>
+              <div className="space-y-4 my-4">
+                <h3 className="font-medium text-sm text-gray-500">现有模型</h3>
+                
+                {providers.find(p => p.id === currentProvider)?.models.map(model => (
+                  <div key={model.id} className="flex items-center justify-between p-2 border rounded-md">
+                    <div>
+                      <div className="font-medium">{model.name}</div>
+                      <div className="text-xs text-gray-500">ID: {model.id}</div>
+                    </div>
+                    <div className="flex gap-2">
+                      {providers.find(p => p.id === currentProvider)?.defaultModelId === model.id ? (
+                        <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded-full">默认</span>
+                      ) : (
+                        <Button 
+                          variant="outline" 
+                          size="sm" 
+                          onClick={() => handleSetDefaultModel(currentProvider, model.id)}
+                        >
+                          设为默认
+                        </Button>
+                      )}
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        className="text-destructive"
+                        onClick={() => handleDeleteModel(currentProvider, model.id)}
+                        disabled={(providers.find(p => p.id === currentProvider)?.models.length || 0) <= 1}
+                      >
+                        <Trash2 size={14} />
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              
+              <div className="border-t pt-4">
+                <h3 className="font-medium text-sm text-gray-500 mb-2">添加新模型</h3>
+                <div className="space-y-2">
+                  <div>
+                    <Label htmlFor="new-model-name">模型名称</Label>
+                    <Input
+                      id="new-model-name"
+                      value={newModel.name}
+                      onChange={(e) => setNewModel({ ...newModel, name: e.target.value })}
+                      placeholder="例如: GPT-4 Turbo"
+                    />
+                  </div>
+                  
+                  <Button onClick={handleAddModel} className="w-full">
+                    <Plus size={16} className="mr-1" />
+                    添加模型
+                  </Button>
+                </div>
+              </div>
+            </>
+          )}
         </DialogContent>
       </Dialog>
     </div>

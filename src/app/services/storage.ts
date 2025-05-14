@@ -1,4 +1,10 @@
 import { AIProvider, ProxySettings } from '../types';
+import { logService } from './log';
+
+/**
+ * 检查是否在浏览器环境中
+ */
+const isBrowser = typeof window !== 'undefined';
 
 /**
  * 存储服务类
@@ -13,10 +19,12 @@ class StorageService {
    */
   getProviders(): AIProvider[] {
     try {
-      const providers = window.localStorage.getItem(this.providersKey);
+      if (!isBrowser) return [];
+      
+      const providers = localStorage.getItem(this.providersKey);
       return providers ? JSON.parse(providers) : [];
     } catch (error) {
-      console.error('获取AI提供商失败:', error);
+      logService.error('获取AI提供商失败:', error);
       return [];
     }
   }
@@ -26,9 +34,11 @@ class StorageService {
    */
   saveProviders(providers: AIProvider[]): void {
     try {
-      window.localStorage.setItem(this.providersKey, JSON.stringify(providers));
+      if (!isBrowser) return;
+      
+      localStorage.setItem(this.providersKey, JSON.stringify(providers));
     } catch (error) {
-      console.error('保存AI提供商失败:', error);
+      logService.error('保存AI提供商失败:', error);
     }
   }
 
@@ -37,7 +47,18 @@ class StorageService {
    */
   getProxySettings(): ProxySettings {
     try {
-      const settings = window.localStorage.getItem(this.proxyKey);
+      if (!isBrowser) {
+        return {
+          enabled: false,
+          host: '',
+          port: '',
+          requiresAuth: false,
+          username: '',
+          password: ''
+        };
+      }
+      
+      const settings = localStorage.getItem(this.proxyKey);
       return settings 
         ? JSON.parse(settings) 
         : {
@@ -49,7 +70,7 @@ class StorageService {
             password: ''
           };
     } catch (error) {
-      console.error('获取代理设置失败:', error);
+      logService.error('获取代理设置失败:', error);
       return {
         enabled: false,
         host: '',
@@ -66,9 +87,11 @@ class StorageService {
    */
   saveProxySettings(settings: ProxySettings): void {
     try {
-      window.localStorage.setItem(this.proxyKey, JSON.stringify(settings));
+      if (!isBrowser) return;
+      
+      localStorage.setItem(this.proxyKey, JSON.stringify(settings));
     } catch (error) {
-      console.error('保存代理设置失败:', error);
+      logService.error('保存代理设置失败:', error);
     }
   }
 
@@ -77,9 +100,11 @@ class StorageService {
    */
   getSelectedProviderId(): string {
     try {
-      return window.localStorage.getItem('selectedProviderId') || 'default';
+      if (!isBrowser) return 'default';
+      
+      return localStorage.getItem('selectedProviderId') || 'default';
     } catch (error) {
-      console.error('获取选中提供商ID失败:', error);
+      logService.error('获取选中提供商ID失败:', error);
       return 'default';
     }
   }
@@ -89,9 +114,11 @@ class StorageService {
    */
   saveSelectedProviderId(id: string): void {
     try {
-      window.localStorage.setItem('selectedProviderId', id);
+      if (!isBrowser) return;
+      
+      localStorage.setItem('selectedProviderId', id);
     } catch (error) {
-      console.error('保存选中提供商ID失败:', error);
+      logService.error('保存选中提供商ID失败:', error);
     }
   }
 }

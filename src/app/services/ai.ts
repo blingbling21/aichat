@@ -1,18 +1,102 @@
 import { AIProvider, Message, ProxySettings } from '../types';
 import { storageService } from './storage';
+import { logService } from './log';
 
 /**
  * AI服务类
  * 用于处理与AI提供商的通信
  */
 class AIService {
+  // 保存当前的请求控制器，用于取消请求
+  private currentStreamController: AbortController | null = null;
+
+  /**
+   * 确保消息历史符合模型要求的格式
+   * 特别是处理deepseek-reasoner需要严格交替的用户和助手消息的情况
+   */
+  private normalizeMessageHistory(
+    history: { role: 'user' | 'assistant'; content: string }[],
+    modelName: string
+  ): { role: 'user' | 'assistant'; content: string }[] {
+    // 如果不是deepseek-reasoner模型，不需要特殊处理
+    if (modelName !== 'deepseek-reasoner') {
+      return history;
+    }
+
+    logService.info(`为deepseek-reasoner模型规范化消息历史，原始消息数: ${history.length}`);
+    
+    // 如果历史为空，返回空数组
+    if (!history || history.length === 0) {
+      return [];
+    }
+
+    const normalizedHistory: { role: 'user' | 'assistant'; content: string }[] = [];
+    
+    // 确保第一条消息是用户消息
+    let expectedRole: 'user' | 'assistant' = 'user';
+    
+    for (const message of history) {
+      // 如果当前消息角色与期望角色匹配
+      if (message.role === expectedRole) {
+        normalizedHistory.push(message);
+        // 切换期望的下一个角色
+        expectedRole = expectedRole === 'user' ? 'assistant' : 'user';
+      } else {
+        // 如果连续两条相同角色的消息，跳过第一条
+        // 注意：这是一种简单的策略，可能需要根据具体需求调整
+        if (normalizedHistory.length > 0 && 
+            normalizedHistory[normalizedHistory.length - 1].role === message.role) {
+          // 合并内容而不是丢弃
+          const lastMessage = normalizedHistory[normalizedHistory.length - 1];
+          lastMessage.content += "\n\n" + message.content;
+          logService.debug(`合并连续的${message.role}消息`);
+        } else {
+          // 如果需要，添加一个空的消息来保持交替
+          if (normalizedHistory.length > 0) {
+            const emptyMessage = {
+              role: expectedRole,
+              content: expectedRole === 'assistant' ? "我理解了。" : "请继续。"
+            };
+            normalizedHistory.push(emptyMessage);
+            logService.debug(`添加空的${expectedRole}消息以保持交替`);
+          }
+          normalizedHistory.push(message);
+          expectedRole = expectedRole === 'user' ? 'assistant' : 'user';
+        }
+      }
+    }
+    
+    // 确保最后一条消息是用户消息
+    if (normalizedHistory.length > 0 && 
+        normalizedHistory[normalizedHistory.length - 1].role === 'assistant') {
+      // 移除最后一条助手消息，因为它后面没有用户消息
+      normalizedHistory.pop();
+      logService.debug('移除最后一条没有对应用户消息的助手消息');
+    }
+    
+    logService.info(`规范化后的消息数: ${normalizedHistory.length}`);
+    return normalizedHistory;
+  }
+
+  /**
+   * 取消当前流式生成
+   */
+  cancelStream() {
+    if (this.currentStreamController) {
+      this.currentStreamController.abort();
+      this.currentStreamController = null;
+      logService.info('已取消流式生成');
+    }
+  }
+
   /**
    * 发送消息到AI并获取回复
    */
   async sendMessage(
     message: string, 
     providerId?: string,
-    history?: { role: 'user' | 'assistant'; content: string }[]
+    history?: { role: 'user' | 'assistant'; content: string }[],
+    modelId?: string
   ): Promise<Message> {
     try {
       // 获取选中的提供商
@@ -21,14 +105,31 @@ class AIService {
       const provider = providers.find(p => p.id === id);
       
       if (!provider) {
+        logService.error('找不到选中的AI提供商');
         throw new Error('找不到选中的AI提供商');
+      }
+      
+      // 确定使用的模型ID
+      let actualModelId = modelId;
+      if (!actualModelId) {
+        // 如果没有提供特定的模型ID，则使用提供商的默认模型
+        if (provider.defaultModelId) {
+          actualModelId = provider.defaultModelId;
+        } else if (provider.models && provider.models.length > 0) {
+          actualModelId = provider.models[0].id;
+        }
+      }
+      
+      if (!actualModelId) {
+        logService.error('找不到可用的AI模型');
+        throw new Error('找不到可用的AI模型');
       }
       
       // 获取代理设置
       const proxySettings = storageService.getProxySettings();
       
       // 调用真实的API
-      const response = await this.callAI(message, provider, proxySettings, history);
+      const response = await this.callAI(message, provider, proxySettings, history, actualModelId);
       
       return {
         id: Date.now().toString(),
@@ -37,7 +138,7 @@ class AIService {
         timestamp: new Date()
       };
     } catch (error) {
-      console.error('AI服务错误:', error);
+      logService.error('AI服务错误', error);
       return {
         id: Date.now().toString(),
         content: '发生错误，请检查网络连接或API设置。' + (error instanceof Error ? ` 错误信息: ${error.message}` : ''),
@@ -48,13 +149,90 @@ class AIService {
   }
   
   /**
+   * 流式发送消息到AI并获取回复
+   * @param message 用户消息
+   * @param onUpdate 流式内容更新回调
+   * @param providerId 提供商ID
+   * @param history 聊天历史
+   * @param modelId 模型ID
+   */
+  async sendMessageStream(
+    message: string,
+    onUpdate: (content: string, done: boolean, error?: boolean) => void,
+    providerId?: string,
+    history?: { role: 'user' | 'assistant'; content: string }[],
+    modelId?: string
+  ): Promise<void> {
+    // 如果有正在进行的请求，先取消
+    if (this.currentStreamController) {
+      this.currentStreamController.abort();
+    }
+    
+    // 创建新的AbortController
+    this.currentStreamController = new AbortController();
+    
+    try {
+      // 获取选中的提供商
+      const id = providerId || storageService.getSelectedProviderId();
+      const providers = storageService.getProviders();
+      const provider = providers.find(p => p.id === id);
+      
+      if (!provider) {
+        throw new Error('找不到选中的AI提供商');
+      }
+      
+      // 确定使用的模型ID
+      let actualModelId = modelId;
+      if (!actualModelId) {
+        // 如果没有提供特定的模型ID，则使用提供商的默认模型
+        if (provider.defaultModelId) {
+          actualModelId = provider.defaultModelId;
+        } else if (provider.models && provider.models.length > 0) {
+          actualModelId = provider.models[0].id;
+        }
+      }
+      
+      if (!actualModelId) {
+        throw new Error('找不到可用的AI模型');
+      }
+      
+      // 获取代理设置
+      const proxySettings = storageService.getProxySettings();
+      
+      // 调用流式API
+      await this.streamCallAI(
+        message, 
+        provider, 
+        proxySettings, 
+        onUpdate,
+        this.currentStreamController.signal,
+        history, 
+        actualModelId
+      );
+    } catch (error) {
+      logService.error('AI服务流式错误', error);
+      
+      // 检查是否是取消请求导致的错误
+      if (error instanceof Error && error.name === 'AbortError') {
+        onUpdate('生成已被用户中断', true, true);
+      } else {
+        onUpdate('发生错误，请检查网络连接或API设置。' + 
+          (error instanceof Error ? ` 错误信息: ${error.message}` : ''), true, true);
+      }
+    } finally {
+      this.currentStreamController = null;
+    }
+  }
+  
+  /**
    * 真实的API调用
    */
   private async callAI(
     message: string, 
     provider: AIProvider, 
     proxySettings: ProxySettings,
-    history?: { role: 'user' | 'assistant'; content: string }[]
+    history?: { role: 'user' | 'assistant'; content: string }[],
+    modelId?: string
   ): Promise<string> {
     // 根据Provider的name判断使用哪种API格式
     let response;
@@ -91,15 +269,15 @@ class AIService {
     }
     
     // 调试输出
-    console.log('发送消息到:', provider.name);
-    console.log('API端点:', provider.apiEndpoint);
-    console.log('代理设置:', proxySettings.enabled ? '已启用' : '未启用');
+    logService.info(`发送消息到: ${provider.name}, 使用模型: ${modelId}`);
+    logService.debug(`API端点: ${provider.apiEndpoint}`);
+    logService.debug(`代理设置: ${proxySettings.enabled ? '已启用' : '未启用'}`);
     
     // 注意：在浏览器环境中，代理设置通常需要在服务器端处理
     // 或者使用特殊的代理配置扩展/中间件
     // 这里记录代理信息，但实际应用可能需要通过后端API转发请求
     if (proxySettings.enabled) {
-      console.log('使用代理:', `${proxySettings.host}:${proxySettings.port}`);
+      logService.debug(`使用代理: ${proxySettings.host}:${proxySettings.port}`);
       // 在Tauri应用中，可以考虑使用http客户端插件在Rust端处理代理
     }
     
@@ -107,7 +285,7 @@ class AIService {
     if (provider.name.toLowerCase().includes('openai') || provider.name.toLowerCase().includes('chatgpt')) {
       // OpenAI API格式
       options.body = JSON.stringify({
-        model: 'gpt-3.5-turbo', // 可以从提供商配置中获取
+        model: modelId || 'gpt-3.5-turbo', // 使用传入的模型ID或默认模型
         messages: [
           ...(history || []),
           {
@@ -115,7 +293,8 @@ class AIService {
             content: message
           }
         ],
-        temperature: 0.7
+        temperature: 0.7,
+        stream: false // 非流式模式
       });
       
       const fetchResponse = await fetch(provider.apiEndpoint, options);
@@ -131,9 +310,10 @@ class AIService {
     } else if (provider.name.toLowerCase().includes('claude') || provider.name.toLowerCase().includes('anthropic')) {
       // Claude/Anthropic API格式
       options.body = JSON.stringify({
-        model: 'claude-2', // 可以从提供商配置中获取
+        model: modelId || 'claude-2', // 使用传入的模型ID或默认模型
         prompt: `\n\nHuman: ${message}\n\nAssistant:`,
-        max_tokens_to_sample: 1000
+        max_tokens_to_sample: 1000,
+        stream: false // 非流式模式
       });
       
       const fetchResponse = await fetch(provider.apiEndpoint, options);
@@ -145,12 +325,77 @@ class AIService {
       
       const data = await fetchResponse.json();
       response = data.completion;
+    
+    } else if (provider.name.toLowerCase().includes('deepseek')) {
+      logService.info(`modelId: ${modelId}`);
+      // 查找模型名称而不是使用ID
+      let modelName = 'deepseek-chat'; // 默认使用DeepSeek-V3
+      
+      // 尝试从提供商的模型列表中找到模型名称
+      if (modelId && provider.models) {
+        logService.info(`处理DeepSeek模型ID: ${modelId}, 类型: ${typeof modelId}`);
+        
+        const selectedModel = provider.models.find(m => m.id === modelId);
+        if (selectedModel) {
+          // 使用模型的name属性判断
+          const modelNameLower = selectedModel.name.toLowerCase();
+          if (modelNameLower.includes('reasoner') || modelNameLower.includes('r1') || 
+              selectedModel.id === 'deepseek-reasoner') {
+            modelName = 'deepseek-reasoner';
+          } else {
+            modelName = 'deepseek-chat';
+          }
+          
+          logService.info(`使用DeepSeek模型: ${modelName}, 模型名称: ${selectedModel.name}`);
+        } else {
+          logService.warn(`未找到匹配的DeepSeek模型: ${modelId}`);
+        }
+      }
+      
+      // 规范化消息历史，确保符合模型要求格式
+      const normalizedHistory = this.normalizeMessageHistory(history || [], modelName);
+      
+      // DeepSeek API格式 - 与OpenAI兼容
+      options.body = JSON.stringify({
+        model: modelName, // 使用模型名称而不是ID
+        messages: [
+          ...normalizedHistory,
+          {
+            role: 'user',
+            content: message
+          }
+        ],
+        stream: false,
+        temperature: 0.7
+      });
+      
+      // 确保使用正确的API端点
+      let apiEndpoint = provider.apiEndpoint;
+      if (!apiEndpoint || !apiEndpoint.startsWith('https://api.deepseek.com')) {
+        apiEndpoint = 'https://api.deepseek.com/chat/completions';
+        logService.warn(`DeepSeek API端点不正确，使用默认端点: ${apiEndpoint}`);
+      } else if (!apiEndpoint.includes('/chat/completions')) {
+        apiEndpoint = 'https://api.deepseek.com/chat/completions';
+        logService.warn(`DeepSeek API端点不完整，使用完整端点: ${apiEndpoint}`);
+      }
+      
+      const fetchResponse = await fetch(apiEndpoint, options);
+      
+      if (!fetchResponse.ok) {
+        const errorText = await fetchResponse.text();
+        throw new Error(`DeepSeek API错误: ${fetchResponse.status} - ${errorText}`);
+      }
+      
+      const data = await fetchResponse.json();
+      response = data.choices[0].message.content;
       
     } else {
       // 通用API格式处理
-      // 假设格式为 { prompt: string }
+      // 假设格式为 { prompt: string, model: string }
       options.body = JSON.stringify({
-        prompt: message
+        prompt: message,
+        model: modelId,
+        stream: false
       });
       
       const fetchResponse = await fetch(provider.apiEndpoint, options);
@@ -168,6 +413,286 @@ class AIService {
     }
     
     return response;
+  }
+  
+  /**
+   * 流式API调用
+   */
+  private async streamCallAI(
+    message: string, 
+    provider: AIProvider, 
+    proxySettings: ProxySettings,
+    onUpdate: (content: string, done: boolean, error?: boolean) => void,
+    abortSignal: AbortSignal,
+    history?: { role: 'user' | 'assistant'; content: string }[],
+    modelId?: string
+  ): Promise<void> {
+    // 准备请求选项
+    const options: RequestInit = {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      signal: abortSignal, // 添加中断信号
+    };
+    
+    // 添加API密钥到请求头
+    if (provider.apiKey) {
+      // 根据不同的AI提供商添加不同的认证格式
+      if (provider.name.toLowerCase().includes('openai') || provider.name.toLowerCase().includes('chatgpt')) {
+        options.headers = {
+          ...options.headers,
+          'Authorization': `Bearer ${provider.apiKey}`
+        };
+      } else if (provider.name.toLowerCase().includes('claude') || provider.name.toLowerCase().includes('anthropic')) {
+        options.headers = {
+          ...options.headers,
+          'x-api-key': provider.apiKey,
+          'anthropic-version': '2023-06-01' // Claude API版本
+        };
+      } else {
+        // 默认使用Bearer认证
+        options.headers = {
+          ...options.headers,
+          'Authorization': `Bearer ${provider.apiKey}`
+        };
+      }
+    }
+    
+    // 调试输出
+    logService.info(`流式发送消息到: ${provider.name}, 使用模型: ${modelId}`);
+    logService.debug(`API端点: ${provider.apiEndpoint}`);
+    
+    let fullResponse = '';
+    
+    try {
+      // 根据不同的AI提供商构建不同的请求体和处理流式响应
+      if (provider.name.toLowerCase().includes('openai') || provider.name.toLowerCase().includes('chatgpt')) {
+        // OpenAI API流式格式
+        options.body = JSON.stringify({
+          model: modelId || 'gpt-3.5-turbo',
+          messages: [
+            ...(history || []),
+            {
+              role: 'user',
+              content: message
+            }
+          ],
+          temperature: 0.7,
+          stream: true // 启用流式返回
+        });
+        
+        const response = await fetch(provider.apiEndpoint, options);
+        
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`OpenAI API错误: ${response.status} - ${errorText}`);
+        }
+        
+        if (!response.body) {
+          throw new Error('响应不包含数据流');
+        }
+        
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+        
+        // 处理数据流
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          
+          // 解码数据块
+          const chunk = decoder.decode(value, { stream: true });
+          
+          // 处理SSE格式数据
+          const lines = chunk
+            .split('\n')
+            .filter(line => line.trim() !== '' && line.trim() !== 'data: [DONE]');
+          
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const jsonData = JSON.parse(line.slice(6));
+                
+                // 提取增量内容
+                if (jsonData.choices && jsonData.choices[0].delta && jsonData.choices[0].delta.content) {
+                  const content = jsonData.choices[0].delta.content;
+                  fullResponse += content;
+                  onUpdate(fullResponse, false);
+                }
+              } catch (e) {
+                console.error('解析SSE数据错误:', e);
+              }
+            }
+          }
+        }
+        
+        // 流式传输完成
+        onUpdate(fullResponse, true);
+        
+      } else if (provider.name.toLowerCase().includes('claude') || provider.name.toLowerCase().includes('anthropic')) {
+        // Claude API流式格式
+        options.body = JSON.stringify({
+          model: modelId || 'claude-2',
+          prompt: `\n\nHuman: ${message}\n\nAssistant:`,
+          max_tokens_to_sample: 1000,
+          stream: true
+        });
+        
+        const response = await fetch(provider.apiEndpoint, options);
+        
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`Claude API错误: ${response.status} - ${errorText}`);
+        }
+        
+        if (!response.body) {
+          throw new Error('响应不包含数据流');
+        }
+        
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+        
+        // 处理数据流
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          
+          // 解码数据块
+          const chunk = decoder.decode(value, { stream: true });
+          
+          // 处理SSE格式数据
+          const lines = chunk
+            .split('\n')
+            .filter(line => line.trim() !== '' && line.trim() !== 'event: done');
+          
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const jsonData = JSON.parse(line.slice(6));
+                
+                // 提取增量内容
+                if (jsonData.completion) {
+                  fullResponse = jsonData.completion; // Claude返回完整的响应而不是增量
+                  onUpdate(fullResponse, false);
+                }
+              } catch (e) {
+                console.error('解析Claude SSE数据错误:', e);
+              }
+            }
+          }
+        }
+        
+        // 流式传输完成
+        onUpdate(fullResponse, true);
+        
+      } else if (provider.name.toLowerCase().includes('deepseek')) {
+        // 查找模型名称
+        let modelName = 'deepseek-chat'; // 默认使用DeepSeek-V3
+        
+        if (modelId && provider.models) {
+          logService.info(`处理DeepSeek模型ID: ${modelId}, 类型: ${typeof modelId}`);
+          
+          const selectedModel = provider.models.find(m => m.id === modelId);
+          if (selectedModel) {
+            // 使用模型的name属性判断
+            const modelNameLower = selectedModel.name.toLowerCase();
+            if (modelNameLower.includes('reasoner') || modelNameLower.includes('r1') || 
+                selectedModel.id === 'deepseek-reasoner') {
+              modelName = 'deepseek-reasoner';
+            } else {
+              modelName = 'deepseek-chat';
+            }
+            
+            logService.info(`使用DeepSeek流式模型: ${modelName}, 模型名称: ${selectedModel.name}`);
+          } else {
+            logService.warn(`未找到匹配的DeepSeek模型: ${modelId}`);
+          }
+        }
+        
+        // 规范化消息历史，确保符合模型要求格式
+        const normalizedHistory = this.normalizeMessageHistory(history || [], modelName);
+        
+        // DeepSeek API格式 - 与OpenAI兼容
+        options.body = JSON.stringify({
+          model: modelName,
+          messages: [
+            ...normalizedHistory,
+            {
+              role: 'user',
+              content: message
+            }
+          ],
+          stream: true,
+          temperature: 0.7
+        });
+        
+        // 确保使用正确的API端点
+        let apiEndpoint = provider.apiEndpoint;
+        if (!apiEndpoint || !apiEndpoint.startsWith('https://api.deepseek.com')) {
+          apiEndpoint = 'https://api.deepseek.com/chat/completions';
+        } else if (!apiEndpoint.includes('/chat/completions')) {
+          apiEndpoint = 'https://api.deepseek.com/chat/completions';
+        }
+        
+        const response = await fetch(apiEndpoint, options);
+        
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`DeepSeek API错误: ${response.status} - ${errorText}`);
+        }
+        
+        if (!response.body) {
+          throw new Error('响应不包含数据流');
+        }
+        
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+        
+        // 处理数据流
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          
+          // 解码数据块
+          const chunk = decoder.decode(value, { stream: true });
+          
+          // 处理SSE格式数据
+          const lines = chunk
+            .split('\n')
+            .filter(line => line.trim() !== '' && line.trim() !== 'data: [DONE]');
+          
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const jsonData = JSON.parse(line.slice(6));
+                
+                // 提取增量内容
+                if (jsonData.choices && jsonData.choices[0].delta && jsonData.choices[0].delta.content) {
+                  const content = jsonData.choices[0].delta.content;
+                  fullResponse += content;
+                  onUpdate(fullResponse, false);
+                }
+              } catch (e) {
+                console.error('解析DeepSeek SSE数据错误:', e);
+              }
+            }
+          }
+        }
+        
+        // 流式传输完成
+        onUpdate(fullResponse, true);
+      } else {
+        // 对于不支持流式返回的API，退回到非流式调用
+        logService.warn(`${provider.name} 不支持流式返回，使用非流式模式`);
+        const response = await this.callAI(message, provider, proxySettings, history, modelId);
+        onUpdate(response, true);
+      }
+    } catch (error) {
+      console.error('流式API调用错误:', error);
+      logService.error('流式API调用错误', error);
+      throw error;
+    }
   }
   
   /**
@@ -193,20 +718,49 @@ class AIService {
         };
       }
       
+      // 处理不同类型提供商的默认模型
+      let testModelId = null;
+      
+      if (provider.name.toLowerCase().includes('deepseek')) {
+        // DeepSeek使用标准模型名称
+        testModelId = 'deepseek-chat'; // 默认使用DeepSeek-V3
+        
+        // 如果有默认模型且是有效的DeepSeek模型，使用它
+        if (provider.defaultModelId) {
+          const defaultModel = provider.models.find(m => m.id === provider.defaultModelId);
+          if (defaultModel) {
+            // 使用模型的name属性判断
+            const modelNameLower = defaultModel.name.toLowerCase();
+            testModelId = modelNameLower.includes('reasoner') || modelNameLower.includes('r1') ? 
+              'deepseek-reasoner' : 'deepseek-chat';
+          }
+        }
+        
+        logService.info(`DeepSeek API测试使用模型: ${testModelId}`);
+      } else {
+        // 其他提供商正常使用模型ID
+        testModelId = provider.defaultModelId;
+        if (!testModelId && provider.models && provider.models.length > 0) {
+          testModelId = provider.models[0].id;
+        }
+      }
+      
       const proxySettings = storageService.getProxySettings();
       
       // 测试消息
       const testMessage = "这是一条测试消息，请简短回复以验证连接正常。";
       
+      logService.info(`测试连接 ${provider.name}，使用模型: ${testModelId || '默认模型'}`);
+      
       // 发送测试请求
-      const response = await this.callAI(testMessage, provider, proxySettings);
+      const response = await this.callAI(testMessage, provider, proxySettings, undefined, testModelId);
       
       return {
         success: true,
         message: `连接成功！收到回复: "${response.substring(0, 50)}${response.length > 50 ? '...' : ''}"`
       };
     } catch (error) {
-      console.error('测试连接失败:', error);
+      logService.error('测试连接失败:', error);
       return {
         success: false,
         message: `连接失败: ${error instanceof Error ? error.message : '未知错误'}`

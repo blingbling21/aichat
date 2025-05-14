@@ -15,11 +15,20 @@ name = "app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
+# Tauri构建工具，用于编译时处理Tauri应用
 tauri-build = { version = "2.2.0", features = [] }
 
 [dependencies]
+# JSON序列化和反序列化库
 serde_json = "1.0"
+# Rust数据结构的序列化和反序列化框架
 serde = { version = "1.0", features = ["derive"] }
+# 日志门面库
 log = "0.4"
+# Tauri核心库，用于构建跨平台桌面应用
 tauri = { version = "2.5.0", features = [] }
-tauri-plugin-log = "2.0.0-rc"
+# 结构化日志库，提供高级日志记录功能
+tracing = "0.1.41"
+# tracing的订阅器库，提供日志收集和处理功能
+# env-filter特性允许通过环境变量控制日志级别
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }

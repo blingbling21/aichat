@@ -6,6 +6,18 @@ export type Message = {
   content: string;
   role: 'user' | 'assistant';
   timestamp: Date;
+  streaming?: boolean; // 标记消息是否正在流式返回中
+  canceled?: boolean; // 标记消息是否被取消生成
+};
+
+/**
+ * AI模型类型定义
+ */
+export type AIModel = {
+  id: string;
+  name: string;
+  // 模型特有的参数设置，如temperature, top_p等
+  parameters?: Record<string, number | string | boolean>;
 };
 
 /**
@@ -16,6 +28,10 @@ export type AIProvider = {
   name: string;
   apiEndpoint: string;
   apiKey: string;
+  // 提供商支持的模型列表
+  models: AIModel[];
+  // 当前选中的默认模型ID
+  defaultModelId?: string;
 };
 
 /**
