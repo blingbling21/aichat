@@ -2,7 +2,7 @@
 
 import { FC, useState, useEffect } from 'react';
 import { Plus, Trash2, Save, Edit, Check, Zap, Loader2, Settings } from 'lucide-react';
-import { AIProvider, ProxySettings, AIModel } from '../types';
+import { AIProvider, ProxySettings, AIModel, ModelFeatures } from '../types';
 import { storageService } from '../services/storage';
 import { aiService } from '../services/ai';
 import { logService } from '../services/log';
@@ -65,6 +65,12 @@ const SettingsInterface: FC = () => {
     id: '',
     name: '',
     parameters: {},
+    features: {
+      reasoning: false,
+      image: false,
+      video: false,
+      voice: false
+    }
   });
   
   // 从存储服务加载设置
@@ -119,15 +125,50 @@ const SettingsInterface: FC = () => {
     // 根据提供商名称预设模型
     if (newProvider.name.toLowerCase().includes('openai') || newProvider.name.toLowerCase().includes('chatgpt')) {
       presetModels = [
-        { id: 'gpt-3.5-turbo', name: 'GPT-3.5 Turbo' },
-        { id: 'gpt-4', name: 'GPT-4' },
-        { id: 'gpt-4-turbo', name: 'GPT-4 Turbo' }
+        { 
+          id: 'gpt-3.5-turbo', 
+          name: 'GPT-3.5 Turbo',
+          features: {
+            reasoning: false,
+            image: false
+          }
+        },
+        { 
+          id: 'gpt-4', 
+          name: 'GPT-4',
+          features: {
+            reasoning: true,
+            image: false
+          }
+        },
+        { 
+          id: 'gpt-4-turbo', 
+          name: 'GPT-4 Turbo',
+          features: {
+            reasoning: true,
+            image: false
+          }
+        }
       ];
     } else if (newProvider.name.toLowerCase().includes('deepseek')) {
       // 使用DeepSeek API文档中指定的标准模型名称
       presetModels = [
-        { id: 'deepseek-chat', name: 'DeepSeek-V3' },
-        { id: 'deepseek-reasoner', name: 'DeepSeek-R1' }
+        { 
+          id: 'deepseek-chat', 
+          name: 'DeepSeek-V3',
+          features: {
+            reasoning: false,
+            image: false
+          }
+        },
+        { 
+          id: 'deepseek-reasoner', 
+          name: 'DeepSeek-R1',
+          features: {
+            reasoning: true,
+            image: false
+          }
+        }
       ];
       
       // 确保API端点正确
@@ -137,9 +178,30 @@ const SettingsInterface: FC = () => {
       }
     } else if (newProvider.name.toLowerCase().includes('claude') || newProvider.name.toLowerCase().includes('anthropic')) {
       presetModels = [
-        { id: 'claude-3-opus-20240229', name: 'Claude 3 Opus' },
-        { id: 'claude-3-sonnet-20240229', name: 'Claude 3 Sonnet' },
-        { id: 'claude-3-haiku-20240307', name: 'Claude 3 Haiku' }
+        { 
+          id: 'claude-3-opus-20240229', 
+          name: 'Claude 3 Opus',
+          features: {
+            reasoning: true,
+            image: true
+          }
+        },
+        { 
+          id: 'claude-3-sonnet-20240229', 
+          name: 'Claude 3 Sonnet',
+          features: {
+            reasoning: false,
+            image: true
+          }
+        },
+        { 
+          id: 'claude-3-haiku-20240307', 
+          name: 'Claude 3 Haiku',
+          features: {
+            reasoning: false,
+            image: false
+          }
+        }
       ];
     }
     
@@ -309,7 +371,13 @@ const SettingsInterface: FC = () => {
     setNewModel({
       id: '',
       name: '',
-      parameters: {}
+      parameters: {},
+      features: {
+        reasoning: false,
+        image: false,
+        video: false,
+        voice: false
+      }
     });
     
     toast.success('新的模型已添加');
@@ -365,6 +433,107 @@ const SettingsInterface: FC = () => {
     const model = provider.models.find(m => m.id === modelId);
     logService.info(`已删除模型: ${model?.name}`);
     toast.success('模型已删除');
+  };
+
+  // 更新模型的功能支持
+  const handleFeatureChange = (providerId: string, modelId: string, feature: keyof ModelFeatures, value: boolean) => {
+    const updatedProviders = providers.map(provider => {
+      if (provider.id === providerId) {
+        const updatedModels = provider.models.map(model => {
+          if (model.id === modelId) {
+            return {
+              ...model,
+              features: {
+                ...(model.features || {}),
+                [feature]: value
+              }
+            };
+          }
+          return model;
+        });
+        return {
+          ...provider,
+          models: updatedModels
+        };
+      }
+      return provider;
+    });
+    
+    setProviders(updatedProviders);
+    storageService.saveProviders(updatedProviders);
+    
+    const provider = providers.find(p => p.id === providerId);
+    const model = provider?.models.find(m => m.id === modelId);
+    logService.info(`已更新模型 ${model?.name} 的 ${feature} 功能: ${value}`);
+  };
+
+  // 预设功能配置（根据模型名称预设常见功能）
+  const handlePresetFeatures = (providerId: string, modelId: string) => {
+    const provider = providers.find(p => p.id === providerId);
+    if (!provider) return;
+    
+    const model = provider.models.find(m => m.id === modelId);
+    if (!model) return;
+    
+    let presetFeatures: Partial<ModelFeatures> = {};
+    
+    // 根据模型名称预设功能
+    const modelNameLower = model.name.toLowerCase();
+    
+    // DeepSeek相关模型预设
+    if (modelNameLower.includes('deepseek')) {
+      if (modelNameLower.includes('reasoner') || modelId === 'deepseek-reasoner') {
+        presetFeatures = {
+          reasoning: true,
+          image: false
+        };
+      } else {
+        presetFeatures = {
+          reasoning: false,
+          image: false
+        };
+      }
+    }
+    // OpenAI相关模型预设
+    else if (modelNameLower.includes('gpt-4') || modelNameLower.includes('gpt4')) {
+      presetFeatures = {
+        reasoning: modelNameLower.includes('turbo'),
+        image: modelNameLower.includes('vision')
+      };
+    }
+    // Claude相关模型预设
+    else if (modelNameLower.includes('claude')) {
+      presetFeatures = {
+        reasoning: modelNameLower.includes('opus'),
+        image: modelNameLower.includes('opus') || modelNameLower.includes('sonnet')
+      };
+    }
+    
+    // 应用预设
+    const updatedProviders = providers.map(p => {
+      if (p.id === providerId) {
+        const updatedModels = p.models.map(m => {
+          if (m.id === modelId) {
+            return {
+              ...m,
+              features: presetFeatures
+            };
+          }
+          return m;
+        });
+        return {
+          ...p,
+          models: updatedModels
+        };
+      }
+      return p;
+    });
+    
+    setProviders(updatedProviders);
+    storageService.saveProviders(updatedProviders);
+    
+    toast.success('已应用预设功能配置');
+    logService.info(`已为模型 ${model.name} 应用预设功能配置`);
   };
 
   return (
@@ -658,7 +827,7 @@ const SettingsInterface: FC = () => {
       
       {/* 模型管理对话框 */}
       <Dialog open={modelDialogOpen} onOpenChange={setModelDialogOpen}>
-        <DialogContent className="sm:max-w-[500px]">
+        <DialogContent className="sm:max-w-[600px]">
           <DialogHeader>
             <DialogTitle>模型管理</DialogTitle>
           </DialogHeader>
@@ -669,32 +838,90 @@ const SettingsInterface: FC = () => {
                 <h3 className="font-medium text-sm text-gray-500">现有模型</h3>
                 
                 {providers.find(p => p.id === currentProvider)?.models.map(model => (
-                  <div key={model.id} className="flex items-center justify-between p-2 border rounded-md">
-                    <div>
-                      <div className="font-medium">{model.name}</div>
-                      <div className="text-xs text-gray-500">ID: {model.id}</div>
-                    </div>
-                    <div className="flex gap-2">
-                      {providers.find(p => p.id === currentProvider)?.defaultModelId === model.id ? (
-                        <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded-full">默认</span>
-                      ) : (
+                  <div key={model.id} className="p-3 border rounded-md space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="font-medium">{model.name}</div>
+                        <div className="text-xs text-gray-500">ID: {model.id}</div>
+                      </div>
+                      <div className="flex gap-2 items-center">
+                        {providers.find(p => p.id === currentProvider)?.defaultModelId === model.id ? (
+                          <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded-full">默认</span>
+                        ) : (
+                          <Button 
+                            variant="outline" 
+                            size="sm" 
+                            onClick={() => handleSetDefaultModel(currentProvider, model.id)}
+                          >
+                            设为默认
+                          </Button>
+                        )}
                         <Button 
                           variant="outline" 
                           size="sm" 
-                          onClick={() => handleSetDefaultModel(currentProvider, model.id)}
+                          className="text-destructive"
+                          onClick={() => handleDeleteModel(currentProvider, model.id)}
+                          disabled={(providers.find(p => p.id === currentProvider)?.models.length || 0) <= 1}
                         >
-                          设为默认
+                          <Trash2 size={14} />
                         </Button>
-                      )}
-                      <Button 
-                        variant="outline" 
-                        size="sm" 
-                        className="text-destructive"
-                        onClick={() => handleDeleteModel(currentProvider, model.id)}
-                        disabled={(providers.find(p => p.id === currentProvider)?.models.length || 0) <= 1}
-                      >
-                        <Trash2 size={14} />
-                      </Button>
+                      </div>
+                    </div>
+                    
+                    <div className="border-t pt-3">
+                      <div className="mb-2 flex justify-between items-center">
+                        <h4 className="text-sm font-medium">支持的功能</h4>
+                        <Button 
+                          variant="ghost" 
+                          size="sm" 
+                          className="text-xs h-7 px-2"
+                          onClick={() => handlePresetFeatures(currentProvider, model.id)}
+                        >
+                          智能预设
+                        </Button>
+                      </div>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                        <div className="flex items-center space-x-2">
+                          <Checkbox 
+                            id={`reasoning-${model.id}`}
+                            checked={model.features?.reasoning || false}
+                            onCheckedChange={(checked) => 
+                              handleFeatureChange(currentProvider, model.id, 'reasoning', checked === true)
+                            }
+                          />
+                          <Label htmlFor={`reasoning-${model.id}`} className="text-sm">推理</Label>
+                        </div>
+                        <div className="flex items-center space-x-2">
+                          <Checkbox 
+                            id={`image-${model.id}`}
+                            checked={model.features?.image || false}
+                            onCheckedChange={(checked) => 
+                              handleFeatureChange(currentProvider, model.id, 'image', checked === true)
+                            }
+                          />
+                          <Label htmlFor={`image-${model.id}`} className="text-sm">图片</Label>
+                        </div>
+                        <div className="flex items-center space-x-2">
+                          <Checkbox 
+                            id={`video-${model.id}`}
+                            checked={model.features?.video || false}
+                            onCheckedChange={(checked) => 
+                              handleFeatureChange(currentProvider, model.id, 'video', checked === true)
+                            }
+                          />
+                          <Label htmlFor={`video-${model.id}`} className="text-sm">视频</Label>
+                        </div>
+                        <div className="flex items-center space-x-2">
+                          <Checkbox 
+                            id={`voice-${model.id}`}
+                            checked={model.features?.voice || false}
+                            onCheckedChange={(checked) => 
+                              handleFeatureChange(currentProvider, model.id, 'voice', checked === true)
+                            }
+                          />
+                          <Label htmlFor={`voice-${model.id}`} className="text-sm">语音</Label>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -702,7 +929,7 @@ const SettingsInterface: FC = () => {
               
               <div className="border-t pt-4">
                 <h3 className="font-medium text-sm text-gray-500 mb-2">添加新模型</h3>
-                <div className="space-y-2">
+                <div className="space-y-3">
                   <div>
                     <Label htmlFor="new-model-name">模型名称</Label>
                     <Input
@@ -710,7 +937,78 @@ const SettingsInterface: FC = () => {
                       value={newModel.name}
                       onChange={(e) => setNewModel({ ...newModel, name: e.target.value })}
                       placeholder="例如: GPT-4 Turbo"
+                      className="mb-3"
                     />
+                    
+                    <div className="mb-2">
+                      <h4 className="text-sm font-medium mb-1">支持的功能</h4>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                        <div className="flex items-center space-x-2">
+                          <Checkbox 
+                            id="new-reasoning"
+                            checked={newModel.features?.reasoning || false}
+                            onCheckedChange={(checked) => 
+                              setNewModel({
+                                ...newModel,
+                                features: {
+                                  ...(newModel.features || {}),
+                                  reasoning: checked === true
+                                }
+                              })
+                            }
+                          />
+                          <Label htmlFor="new-reasoning" className="text-sm">推理</Label>
+                        </div>
+                        <div className="flex items-center space-x-2">
+                          <Checkbox 
+                            id="new-image"
+                            checked={newModel.features?.image || false}
+                            onCheckedChange={(checked) => 
+                              setNewModel({
+                                ...newModel,
+                                features: {
+                                  ...(newModel.features || {}),
+                                  image: checked === true
+                                }
+                              })
+                            }
+                          />
+                          <Label htmlFor="new-image" className="text-sm">图片</Label>
+                        </div>
+                        <div className="flex items-center space-x-2">
+                          <Checkbox 
+                            id="new-video"
+                            checked={newModel.features?.video || false}
+                            onCheckedChange={(checked) => 
+                              setNewModel({
+                                ...newModel,
+                                features: {
+                                  ...(newModel.features || {}),
+                                  video: checked === true
+                                }
+                              })
+                            }
+                          />
+                          <Label htmlFor="new-video" className="text-sm">视频</Label>
+                        </div>
+                        <div className="flex items-center space-x-2">
+                          <Checkbox 
+                            id="new-voice"
+                            checked={newModel.features?.voice || false}
+                            onCheckedChange={(checked) => 
+                              setNewModel({
+                                ...newModel,
+                                features: {
+                                  ...(newModel.features || {}),
+                                  voice: checked === true
+                                }
+                              })
+                            }
+                          />
+                          <Label htmlFor="new-voice" className="text-sm">语音</Label>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                   
                   <Button onClick={handleAddModel} className="w-full">

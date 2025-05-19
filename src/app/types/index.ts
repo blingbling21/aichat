@@ -8,6 +8,18 @@ export type Message = {
   timestamp: Date;
   streaming?: boolean; // 标记消息是否正在流式返回中
   canceled?: boolean; // 标记消息是否被取消生成
+  reasoningContent?: string; // deepseek-reasoner模型的推理过程
+  reasoningCollapsed?: boolean; // 推理内容是否折叠
+};
+
+/**
+ * 模型支持的功能类型
+ */
+export type ModelFeatures = {
+  reasoning: boolean; // 推理能力
+  image: boolean;    // 图片生成/理解
+  video: boolean;    // 视频生成/理解
+  voice: boolean;    // 语音交互
 };
 
 /**
@@ -18,6 +30,8 @@ export type AIModel = {
   name: string;
   // 模型特有的参数设置，如temperature, top_p等
   parameters?: Record<string, number | string | boolean>;
+  // 模型支持的功能
+  features?: Partial<ModelFeatures>;
 };
 
 /**

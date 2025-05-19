@@ -1,7 +1,7 @@
 "use client";
 
 import { FC, useState, useRef, useEffect } from 'react';
-import { Send, Loader2, Square } from 'lucide-react';
+import { Send, Loader2, Square, Image, Video, Mic, Brain } from 'lucide-react';
 import { Message, AIProvider, AIModel } from '../types';
 import { aiService } from '../services/ai';
 import { storageService } from '../services/storage';
@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card, CardContent } from "@/components/ui/card";
 import { Markdown } from "@/components/ui/markdown";
+import { toast } from "sonner";
 
 /**
  * 聊天界面组件
@@ -31,6 +32,8 @@ const ChatInterface: FC = () => {
   const [aiProviders, setAiProviders] = useState<AIProvider[]>([]);
   // 当前提供商的可用模型
   const [availableModels, setAvailableModels] = useState<AIModel[]>([]);
+  // 当前选中的模型
+  const [selectedModelData, setSelectedModelData] = useState<AIModel | null>(null);
   
   // 聊天容器引用，用于自动滚动
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -144,6 +147,17 @@ const ChatInterface: FC = () => {
     }
   }, [selectedProvider, aiProviders]);
   
+  // 监听模型变化，更新模型数据
+  useEffect(() => {
+    if (selectedModel && availableModels.length > 0) {
+      const model = availableModels.find(m => m.id === selectedModel);
+      setSelectedModelData(model || null);
+      logService.debug(`当前选中模型: ${model?.name || '未知'}`);
+    } else {
+      setSelectedModelData(null);
+    }
+  }, [selectedModel, availableModels]);
+  
   // 保存聊天历史到本地存储
   useEffect(() => {
     if (messages.length > 0) {
@@ -164,14 +178,25 @@ const ChatInterface: FC = () => {
   };
 
   // 流式消息更新处理函数
-  const handleStreamUpdate = (assistantMessageId: string, content: string, done: boolean, error?: boolean) => {
+  const handleStreamUpdate = (assistantMessageId: string, content: string, done: boolean, error?: boolean, reasoningContent?: string) => {
     setMessages(prevMessages => {
       return prevMessages.map(msg => {
         if (msg.id === assistantMessageId) {
+          // 生成中始终展开，生成完成后自动折叠（有推理内容时）
+          let reasoningCollapsed = msg.reasoningCollapsed;
+          if (reasoningContent !== undefined) {
+            if (!done) {
+              reasoningCollapsed = false;
+            } else {
+              reasoningCollapsed = true;
+            }
+          }
           return {
             ...msg,
             content: content,
+            reasoningContent: reasoningContent !== undefined ? reasoningContent : msg.reasoningContent,
             streaming: !done,
+            reasoningCollapsed,
             // 如果是错误且完成，则标记为取消状态
             canceled: done && error ? true : undefined
           };
@@ -186,6 +211,9 @@ const ChatInterface: FC = () => {
         logService.warn(`流式消息中断: ${content}`);
       } else {
         logService.info(`流式消息完成: ${content.substring(0, 50)}${content.length > 50 ? '...' : ''}`);
+        if (reasoningContent) {
+          logService.info(`推理内容: ${reasoningContent.substring(0, 50)}${reasoningContent.length > 50 ? '...' : ''}`);
+        }
       }
     }
   };
@@ -221,17 +249,19 @@ const ChatInterface: FC = () => {
     
     try {
       // 传递完整的聊天历史以保持上下文（不包括刚创建的空助手消息）
-      const history = [...messages, userMessage].map(msg => ({
-        role: msg.role,
-        content: msg.content
-      }));
+      const history = [...messages, userMessage]
+        .filter(msg => !msg.streaming && msg.content.trim() !== '') // 过滤掉正在流式生成的消息和空消息
+        .map(msg => ({
+          role: msg.role,
+          content: msg.content
+        }));
       
       logService.debug(`使用提供商 ${selectedProvider} 的模型 ${selectedModel} 流式发送消息`);
       
       // 调用AI服务发送流式消息
       await aiService.sendMessageStream(
         input, 
-        (content, done, error) => handleStreamUpdate(assistantMessageId, content, done, error),
+        (content, done, error, reasoningContent) => handleStreamUpdate(assistantMessageId, content, done, error, reasoningContent),
         selectedProvider, 
         history, 
         selectedModel
@@ -274,6 +304,37 @@ const ChatInterface: FC = () => {
     setMessages([]);
     localStorage.removeItem('chatHistory');
     logService.info('已清空聊天记录');
+  };
+
+  // 在组件内部增加切换折叠状态的函数
+  const toggleReasoningCollapse = (msgId: string) => {
+    setMessages(prevMessages => prevMessages.map(msg => {
+      if (msg.id === msgId) {
+        return { ...msg, reasoningCollapsed: !msg.reasoningCollapsed };
+      }
+      return msg;
+    }));
+  };
+
+  // 处理图片上传
+  const handleImageUpload = () => {
+    // 图片上传功能实现
+    toast.info('图片上传功能还在开发中');
+    logService.info('用户请求上传图片');
+  };
+
+  // 处理视频上传
+  const handleVideoUpload = () => {
+    // 视频上传功能实现
+    toast.info('视频上传功能还在开发中');
+    logService.info('用户请求上传视频');
+  };
+
+  // 处理语音输入
+  const handleVoiceInput = () => {
+    // 语音输入功能实现
+    toast.info('语音输入功能还在开发中');
+    logService.info('用户请求语音输入');
   };
 
   return (
@@ -351,22 +412,62 @@ const ChatInterface: FC = () => {
               >
                 <CardContent className="p-3">
                   {message.role === 'assistant' ? (
-                    message.content ? (
-                      <Markdown
-                        content={message.content}
-                        className={message.streaming 
-                          ? 'streaming-content' 
-                          : message.canceled 
-                            ? 'canceled-message' 
-                            : ''}
-                      />
-                    ) : message.streaming ? (
-                      <div className="h-5 w-5">
-                        <Loader2 className="h-5 w-5 animate-spin text-gray-500" />
-                      </div>
-                    ) : (
-                      <p className="text-gray-500">无内容</p>
-                    )
+                    <>
+                      {/* u663eu793au63a8u7406u8fc7u7a0bu5185u5bb9 */}
+                      {message.reasoningContent && (
+                        <div className="mb-4 p-3 bg-gray-100 dark:bg-gray-800 rounded border-l-4 border-yellow-500">
+                          <div className="font-semibold mb-1 text-yellow-600 dark:text-yellow-400 flex items-center justify-between">
+                            <span className="mr-1">推理过程</span>
+                            <button
+                              className="text-xs text-blue-500 hover:underline ml-2 focus:outline-none"
+                              onClick={() => toggleReasoningCollapse(message.id)}
+                              tabIndex={0}
+                            >
+                              {message.reasoningCollapsed ? '展开' : '收起'}
+                            </button>
+                          </div>
+                          {message.reasoningCollapsed ? (
+                            <div className="text-gray-700 dark:text-gray-300 cursor-pointer select-none" onClick={() => toggleReasoningCollapse(message.id)}>
+                              {/* 只显示前2行或100字 */}
+                              {(() => {
+                                const lines = message.reasoningContent.split('\n');
+                                const preview = lines.slice(0, 2).join('\n');
+                                if (preview.length > 100) {
+                                  return preview.slice(0, 100) + '...';
+                                } else if (lines.length > 2) {
+                                  return preview + '...';
+                                } else {
+                                  return preview;
+                                }
+                              })()}
+                            </div>
+                          ) : (
+                            <Markdown 
+                              content={message.reasoningContent} 
+                              className={message.streaming ? 'streaming-content' : ''}
+                            />
+                          )}
+                        </div>
+                      )}
+                      
+                      {/* u663eu793au5b9eu9645u56deu7b54u5185u5bb9 */}
+                      {message.content ? (
+                        <Markdown
+                          content={message.content}
+                          className={message.streaming 
+                            ? 'streaming-content' 
+                            : message.canceled 
+                              ? 'canceled-message' 
+                              : ''}
+                        />
+                      ) : message.streaming ? (
+                        <div className="h-5 w-5">
+                          <Loader2 className="h-5 w-5 animate-spin text-gray-500" />
+                        </div>
+                      ) : (
+                        <p className="text-gray-500">无内容</p>
+                      )}
+                    </>
                   ) : (
                     <p className="whitespace-pre-wrap">{message.content}</p>
                   )}
@@ -385,6 +486,62 @@ const ChatInterface: FC = () => {
       
       {/* 输入框 */}
       <div className="border-t border-gray-200 dark:border-gray-800 p-4">
+        {/* 模型功能按钮区 */}
+        {selectedModelData && selectedModelData.features && (
+          <div className="mb-2 flex flex-wrap gap-1">
+            {selectedModelData.features.image && (
+              <Button
+                variant="outline"
+                size="icon"
+                className="h-8 w-8"
+                title="上传图片"
+                onClick={handleImageUpload}
+                disabled={isLoading}
+              >
+                <Image className="h-4 w-4" />
+              </Button>
+            )}
+            
+            {selectedModelData.features.video && (
+              <Button
+                variant="outline"
+                size="icon"
+                className="h-8 w-8"
+                title="上传视频"
+                onClick={handleVideoUpload}
+                disabled={isLoading}
+              >
+                <Video className="h-4 w-4" />
+              </Button>
+            )}
+            
+            {selectedModelData.features.voice && (
+              <Button
+                variant="outline"
+                size="icon"
+                className="h-8 w-8"
+                title="语音输入"
+                onClick={handleVoiceInput}
+                disabled={isLoading}
+              >
+                <Mic className="h-4 w-4" />
+              </Button>
+            )}
+            
+            {selectedModelData.features.reasoning && (
+              <Button
+                variant="outline"
+                size="icon"
+                className="h-8 w-8"
+                title="推理能力"
+                disabled={true}
+              >
+                <Brain className="h-4 w-4" />
+              </Button>
+            )}
+          </div>
+        )}
+        
         <div className="flex items-center space-x-2">
           <Input
             value={input}

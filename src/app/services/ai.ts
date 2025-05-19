@@ -30,46 +30,49 @@ class AIService {
       return [];
     }
 
+    // 对于 deepseek-reasoner 模型，我们需要确保消息严格交替
     const normalizedHistory: { role: 'user' | 'assistant'; content: string }[] = [];
     
-    // 确保第一条消息是用户消息
-    let expectedRole: 'user' | 'assistant' = 'user';
+    // 首先确保历史中只保留非空消息
+    const filteredHistory = history.filter(msg => msg.content.trim() !== '');
     
-    for (const message of history) {
-      // 如果当前消息角色与期望角色匹配
-      if (message.role === expectedRole) {
-        normalizedHistory.push(message);
-        // 切换期望的下一个角色
-        expectedRole = expectedRole === 'user' ? 'assistant' : 'user';
+    // 如果没有有效消息，返回空数组
+    if (filteredHistory.length === 0) {
+      return [];
+    }
+    
+    // 如果第一条消息不是用户消息，则丢弃它
+    if (filteredHistory[0].role !== 'user') {
+      filteredHistory.shift();
+    }
+    
+    // 如果此时没有有效消息，返回空数组
+    if (filteredHistory.length === 0) {
+      return [];
+    }
+    
+    // 开始构建严格交替的消息列表
+    normalizedHistory.push(filteredHistory[0]); // 添加第一条用户消息
+    
+    // 从第二条消息开始，确保严格交替
+    for (let i = 1; i < filteredHistory.length; i++) {
+      const prevRole = normalizedHistory[normalizedHistory.length - 1].role;
+      const currentMsg = filteredHistory[i];
+      
+      // 如果当前消息的角色与前一条不同，直接添加
+      if (currentMsg.role !== prevRole) {
+        normalizedHistory.push(currentMsg);
       } else {
-        // 如果连续两条相同角色的消息，跳过第一条
-        // 注意：这是一种简单的策略，可能需要根据具体需求调整
-        if (normalizedHistory.length > 0 && 
-            normalizedHistory[normalizedHistory.length - 1].role === message.role) {
-          // 合并内容而不是丢弃
-          const lastMessage = normalizedHistory[normalizedHistory.length - 1];
-          lastMessage.content += "\n\n" + message.content;
-          logService.debug(`合并连续的${message.role}消息`);
-        } else {
-          // 如果需要，添加一个空的消息来保持交替
-          if (normalizedHistory.length > 0) {
-            const emptyMessage = {
-              role: expectedRole,
-              content: expectedRole === 'assistant' ? "我理解了。" : "请继续。"
-            };
-            normalizedHistory.push(emptyMessage);
-            logService.debug(`添加空的${expectedRole}消息以保持交替`);
-          }
-          normalizedHistory.push(message);
-          expectedRole = expectedRole === 'user' ? 'assistant' : 'user';
-        }
+        // 遇到连续相同角色的消息，合并内容
+        const lastMsg = normalizedHistory[normalizedHistory.length - 1];
+        lastMsg.content += "\n\n" + currentMsg.content;
+        logService.debug(`合并连续的${currentMsg.role}消息`);
       }
     }
     
     // 确保最后一条消息是用户消息
-    if (normalizedHistory.length > 0 && 
-        normalizedHistory[normalizedHistory.length - 1].role === 'assistant') {
-      // 移除最后一条助手消息，因为它后面没有用户消息
+    if (normalizedHistory.length > 0 && normalizedHistory[normalizedHistory.length - 1].role !== 'user') {
+      // 移除最后一条助手消息
       normalizedHistory.pop();
       logService.debug('移除最后一条没有对应用户消息的助手消息');
     }
@@ -129,7 +132,7 @@ class AIService {
       const proxySettings = storageService.getProxySettings();
       
       // 调用真实的API
-      const response = await this.callAI(message, provider, proxySettings, history, actualModelId);
+      const response = await this.callAI(message, provider, proxySettings, history, actualModelId, false);
       
       return {
         id: Date.now().toString(),
@@ -158,7 +161,7 @@ class AIService {
    */
   async sendMessageStream(
     message: string,
-    onUpdate: (content: string, done: boolean, error?: boolean) => void,
+    onUpdate: (content: string, done: boolean, error?: boolean, reasoningContent?: string) => void,
     providerId?: string,
     history?: { role: 'user' | 'assistant'; content: string }[],
     modelId?: string
@@ -232,7 +235,8 @@ class AIService {
     provider: AIProvider, 
     proxySettings: ProxySettings,
     history?: { role: 'user' | 'assistant'; content: string }[],
-    modelId?: string
+    modelId?: string,
+    isStream: boolean = false
   ): Promise<string> {
     // 根据Provider的name判断使用哪种API格式
     let response;
@@ -355,17 +359,54 @@ class AIService {
       // 规范化消息历史，确保符合模型要求格式
       const normalizedHistory = this.normalizeMessageHistory(history || [], modelName);
       
-      // DeepSeek API格式 - 与OpenAI兼容
-      options.body = JSON.stringify({
-        model: modelName, // 使用模型名称而不是ID
-        messages: [
+      // 对于deepseek-reasoner模型，进行特殊处理并添加日志
+      let messages = [];
+      if (modelName === 'deepseek-reasoner') {
+        // 如果历史为空，只添加当前用户消息
+        if (normalizedHistory.length === 0) {
+          messages = [{
+            role: 'user',
+            content: message
+          }];
+        } else {
+          // 使用规范化后的历史，不再重复添加用户消息
+          messages = normalizedHistory;
+          
+          // 如果最后一条消息是用户消息，和当前消息合并，避免连续的用户消息
+          const lastMsg = normalizedHistory[normalizedHistory.length - 1];
+          if (lastMsg && lastMsg.role === 'user') {
+            // 替换掉最后一条用户消息，内容为当前消息
+            messages[messages.length - 1] = {
+              role: 'user',
+              content: message
+            };
+          } else {
+            // 最后一条是助手消息，正常添加当前用户消息
+            messages.push({
+              role: 'user',
+              content: message
+            });
+          }
+        }
+      } else {
+        // 非deepseek-reasoner模型，正常处理
+        messages = [
           ...normalizedHistory,
           {
             role: 'user',
             content: message
           }
-        ],
-        stream: false,
+        ];
+      }
+      
+      // 记录实际发送的消息内容
+      logService.info(`DeepSeek ${modelName} 发送消息: ${JSON.stringify(messages)}`);
+      
+      // DeepSeek API格式 - 与OpenAI兼容
+      options.body = JSON.stringify({
+        model: modelName,
+        messages: messages,
+        stream: isStream,
         temperature: 0.7
       });
       
@@ -422,7 +463,7 @@ class AIService {
     message: string, 
     provider: AIProvider, 
     proxySettings: ProxySettings,
-    onUpdate: (content: string, done: boolean, error?: boolean) => void,
+    onUpdate: (content: string, done: boolean, error?: boolean, reasoningContent?: string) => void,
     abortSignal: AbortSignal,
     history?: { role: 'user' | 'assistant'; content: string }[],
     modelId?: string
@@ -464,6 +505,7 @@ class AIService {
     logService.debug(`API端点: ${provider.apiEndpoint}`);
     
     let fullResponse = '';
+    let reasoningFullResponse = ''; // 用于存储推理过程内容
     
     try {
       // 根据不同的AI提供商构建不同的请求体和处理流式响应
@@ -520,6 +562,14 @@ class AIService {
                   fullResponse += content;
                   onUpdate(fullResponse, false);
                 }
+                
+                // 提取推理内容
+                if (jsonData.choices && jsonData.choices[0].delta && jsonData.choices[0].delta.reasoning_content) {
+                  const reasoningContent = jsonData.choices[0].delta.reasoning_content;
+                  reasoningFullResponse += reasoningContent;
+                  logService.debug(`收到推理内容: ${reasoningContent}`);
+                  onUpdate(fullResponse, false, false, reasoningFullResponse);
+                }
               } catch (e) {
                 console.error('解析SSE数据错误:', e);
               }
@@ -528,7 +578,7 @@ class AIService {
         }
         
         // 流式传输完成
-        onUpdate(fullResponse, true);
+        onUpdate(fullResponse, true, false, reasoningFullResponse);
         
       } else if (provider.name.toLowerCase().includes('claude') || provider.name.toLowerCase().includes('anthropic')) {
         // Claude API流式格式
@@ -584,7 +634,7 @@ class AIService {
         }
         
         // 流式传输完成
-        onUpdate(fullResponse, true);
+        onUpdate(fullResponse, true, false, reasoningFullResponse);
         
       } else if (provider.name.toLowerCase().includes('deepseek')) {
         // 查找模型名称
@@ -613,16 +663,53 @@ class AIService {
         // 规范化消息历史，确保符合模型要求格式
         const normalizedHistory = this.normalizeMessageHistory(history || [], modelName);
         
-        // DeepSeek API格式 - 与OpenAI兼容
-        options.body = JSON.stringify({
-          model: modelName,
-          messages: [
+        // 对于deepseek-reasoner模型，进行特殊处理并添加日志
+        let messages = [];
+        if (modelName === 'deepseek-reasoner') {
+          // 如果历史为空，只添加当前用户消息
+          if (normalizedHistory.length === 0) {
+            messages = [{
+              role: 'user',
+              content: message
+            }];
+          } else {
+            // 使用规范化后的历史，不再重复添加用户消息
+            messages = normalizedHistory;
+            
+            // 如果最后一条消息是用户消息，和当前消息合并，避免连续的用户消息
+            const lastMsg = normalizedHistory[normalizedHistory.length - 1];
+            if (lastMsg && lastMsg.role === 'user') {
+              // 替换掉最后一条用户消息，内容为当前消息
+              messages[messages.length - 1] = {
+                role: 'user',
+                content: message
+              };
+            } else {
+              // 最后一条是助手消息，正常添加当前用户消息
+              messages.push({
+                role: 'user',
+                content: message
+              });
+            }
+          }
+        } else {
+          // 非deepseek-reasoner模型，正常处理
+          messages = [
             ...normalizedHistory,
             {
               role: 'user',
               content: message
             }
-          ],
+          ];
+        }
+        
+        // 记录实际发送的消息内容
+        logService.info(`DeepSeek ${modelName} 发送消息: ${JSON.stringify(messages)}`);
+        
+        // DeepSeek API格式 - 与OpenAI兼容
+        options.body = JSON.stringify({
+          model: modelName,
+          messages: messages,
           stream: true,
           temperature: 0.7
         });
@@ -667,11 +754,20 @@ class AIService {
               try {
                 const jsonData = JSON.parse(line.slice(6));
                 
+                logService.info(`收到DeepSeek SSE数据: ${JSON.stringify(jsonData)}`);
                 // 提取增量内容
                 if (jsonData.choices && jsonData.choices[0].delta && jsonData.choices[0].delta.content) {
                   const content = jsonData.choices[0].delta.content;
                   fullResponse += content;
                   onUpdate(fullResponse, false);
+                }
+                
+                // 提取推理内容
+                if (jsonData.choices && jsonData.choices[0].delta && jsonData.choices[0].delta.reasoning_content) {
+                  const reasoningContent = jsonData.choices[0].delta.reasoning_content;
+                  reasoningFullResponse += reasoningContent;
+                  logService.debug(`收到推理内容: ${reasoningContent}`);
+                  onUpdate(fullResponse, false, false, reasoningFullResponse);
                 }
               } catch (e) {
                 console.error('解析DeepSeek SSE数据错误:', e);
@@ -681,11 +777,11 @@ class AIService {
         }
         
         // 流式传输完成
-        onUpdate(fullResponse, true);
+        onUpdate(fullResponse, true, false, reasoningFullResponse);
       } else {
         // 对于不支持流式返回的API，退回到非流式调用
         logService.warn(`${provider.name} 不支持流式返回，使用非流式模式`);
-        const response = await this.callAI(message, provider, proxySettings, history, modelId);
+        const response = await this.callAI(message, provider, proxySettings, history, modelId, false);
         onUpdate(response, true);
       }
     } catch (error) {
@@ -753,7 +849,7 @@ class AIService {
       logService.info(`测试连接 ${provider.name}，使用模型: ${testModelId || '默认模型'}`);
       
       // 发送测试请求
-      const response = await this.callAI(testMessage, provider, proxySettings, undefined, testModelId);
+      const response = await this.callAI(testMessage, provider, proxySettings, undefined, testModelId, false);
       
       return {
         success: true,
