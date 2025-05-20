@@ -3,13 +3,13 @@
 import { FC } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { MessageSquare, Settings } from 'lucide-react';
+import { MessageSquare, Settings, Users } from 'lucide-react';
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 
 /**
  * 侧边栏导航组件
- * 包含聊天和设置两个导航项
+ * 包含聊天、AI代理和设置三个导航项
  */
 const Sidebar: FC = () => {
   const pathname = usePathname();
@@ -18,8 +18,13 @@ const Sidebar: FC = () => {
   const navItems = [
     {
       name: '聊天',
-      path: '/',
+      path: '/chat',
       icon: <MessageSquare size={24} />
+    },
+    {
+      name: 'AI代理',
+      path: '/agents',
+      icon: <Users size={24} />
     },
     {
       name: '设置',
@@ -39,7 +44,7 @@ const Sidebar: FC = () => {
               <li key={item.path}>
                 <Button
                   asChild
-                  variant={pathname === item.path ? "default" : "ghost"}
+                  variant={pathname === item.path || pathname.startsWith(item.path + '/') ? "default" : "ghost"}
                   className="w-full justify-start"
                 >
                   <Link href={item.path} className="flex items-center gap-3">

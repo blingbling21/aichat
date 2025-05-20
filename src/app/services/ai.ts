@@ -865,6 +865,103 @@ class AIService {
   }
   
   /**
+   * 使用特定Agent发送消息
+   */
+  async sendAgentMessage(
+    message: string,
+    agentId: string,
+    history?: { role: 'user' | 'assistant'; content: string }[],
+    onUpdate?: (content: string, done: boolean, error?: boolean, reasoningContent?: string) => void
+  ): Promise<Message | void> {
+    try {
+      // 获取Agent配置
+      const agent = storageService.getAgent(agentId);
+      if (!agent) {
+        throw new Error(`找不到Agent ID: ${agentId}`);
+      }
+
+      // 获取提供商
+      const providers = storageService.getProviders();
+      const provider = providers.find(p => p.id === agent.providerId);
+      
+      if (!provider) {
+        throw new Error(`找不到Agent使用的AI提供商: ${agent.providerId}`);
+      }
+
+      // 获取代理设置
+      const proxySettings = storageService.getProxySettings();
+      
+      // 验证模型是否存在
+      const modelExists = provider.models.some(m => m.id === agent.modelId);
+      if (!modelExists) {
+        throw new Error(`找不到Agent使用的模型: ${agent.modelId}`);
+      }
+
+      // 如果消息历史为空，且Agent有系统提示词，则创建一个系统消息
+      let enhancedHistory = history || [];
+      if (agent.systemPrompt && enhancedHistory.length === 0) {
+        enhancedHistory = [
+          {
+            role: 'assistant',
+            content: agent.systemPrompt
+          }
+        ];
+      } else if (agent.systemPrompt) {
+        // 如果历史中第一条不是系统消息，则添加系统消息到历史开头
+        const firstMessage = enhancedHistory[0];
+        if (!firstMessage || firstMessage.role !== 'assistant' || firstMessage.content !== agent.systemPrompt) {
+          enhancedHistory = [
+            {
+              role: 'assistant',
+              content: agent.systemPrompt
+            },
+            ...enhancedHistory
+          ];
+        }
+      }
+
+      // 如果有消息更新回调，则使用流式响应
+      if (onUpdate) {
+        await this.streamCallAI(
+          message,
+          provider,
+          proxySettings,
+          onUpdate,
+          new AbortController().signal,
+          enhancedHistory,
+          agent.modelId
+        );
+        return;
+      }
+
+      // 否则使用普通响应
+      const response = await this.callAI(
+        message,
+        provider,
+        proxySettings,
+        enhancedHistory,
+        agent.modelId,
+        false
+      );
+
+      return {
+        id: Date.now().toString(),
+        content: response,
+        role: 'assistant',
+        timestamp: new Date()
+      };
+    } catch (error) {
+      logService.error(`Agent发送消息失败: ${error instanceof Error ? error.message : '未知错误'}`, error);
+      return {
+        id: Date.now().toString(),
+        content: `与Agent通信时出错: ${error instanceof Error ? error.message : '未知错误'}`,
+        role: 'assistant',
+        timestamp: new Date()
+      };
+    }
+  }
+
+  /**
    * 获取可用的AI提供商列表
    */
   getAvailableProviders(): AIProvider[] {

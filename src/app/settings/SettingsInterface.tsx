@@ -467,75 +467,6 @@ const SettingsInterface: FC = () => {
     logService.info(`已更新模型 ${model?.name} 的 ${feature} 功能: ${value}`);
   };
 
-  // 预设功能配置（根据模型名称预设常见功能）
-  const handlePresetFeatures = (providerId: string, modelId: string) => {
-    const provider = providers.find(p => p.id === providerId);
-    if (!provider) return;
-    
-    const model = provider.models.find(m => m.id === modelId);
-    if (!model) return;
-    
-    let presetFeatures: Partial<ModelFeatures> = {};
-    
-    // 根据模型名称预设功能
-    const modelNameLower = model.name.toLowerCase();
-    
-    // DeepSeek相关模型预设
-    if (modelNameLower.includes('deepseek')) {
-      if (modelNameLower.includes('reasoner') || modelId === 'deepseek-reasoner') {
-        presetFeatures = {
-          reasoning: true,
-          image: false
-        };
-      } else {
-        presetFeatures = {
-          reasoning: false,
-          image: false
-        };
-      }
-    }
-    // OpenAI相关模型预设
-    else if (modelNameLower.includes('gpt-4') || modelNameLower.includes('gpt4')) {
-      presetFeatures = {
-        reasoning: modelNameLower.includes('turbo'),
-        image: modelNameLower.includes('vision')
-      };
-    }
-    // Claude相关模型预设
-    else if (modelNameLower.includes('claude')) {
-      presetFeatures = {
-        reasoning: modelNameLower.includes('opus'),
-        image: modelNameLower.includes('opus') || modelNameLower.includes('sonnet')
-      };
-    }
-    
-    // 应用预设
-    const updatedProviders = providers.map(p => {
-      if (p.id === providerId) {
-        const updatedModels = p.models.map(m => {
-          if (m.id === modelId) {
-            return {
-              ...m,
-              features: presetFeatures
-            };
-          }
-          return m;
-        });
-        return {
-          ...p,
-          models: updatedModels
-        };
-      }
-      return p;
-    });
-    
-    setProviders(updatedProviders);
-    storageService.saveProviders(updatedProviders);
-    
-    toast.success('已应用预设功能配置');
-    logService.info(`已为模型 ${model.name} 应用预设功能配置`);
-  };
-
   return (
     <div className="container mx-auto p-6 max-w-4xl h-full overflow-y-auto">
       <h1 className="text-2xl font-bold mb-6">设置</h1>
@@ -871,14 +802,6 @@ const SettingsInterface: FC = () => {
                     <div className="border-t pt-3">
                       <div className="mb-2 flex justify-between items-center">
                         <h4 className="text-sm font-medium">支持的功能</h4>
-                        <Button 
-                          variant="ghost" 
-                          size="sm" 
-                          className="text-xs h-7 px-2"
-                          onClick={() => handlePresetFeatures(currentProvider, model.id)}
-                        >
-                          智能预设
-                        </Button>
                       </div>
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                         <div className="flex items-center space-x-2">
@@ -931,7 +854,7 @@ const SettingsInterface: FC = () => {
                 <h3 className="font-medium text-sm text-gray-500 mb-2">添加新模型</h3>
                 <div className="space-y-3">
                   <div>
-                    <Label htmlFor="new-model-name">模型名称</Label>
+                    <Label htmlFor="new-model-name" className="block mb-1">模型名称</Label>
                     <Input
                       id="new-model-name"
                       value={newModel.name}

@@ -76,8 +76,16 @@ const ChatInterface: FC = () => {
           if (selectedProviderData) {
             setAvailableModels(selectedProviderData.models || []);
             
-            // 设置默认选中的模型
-            if (selectedProviderData.defaultModelId) {
+            // 尝试加载保存的模型ID
+            const savedModelId = storageService.getSelectedModelId();
+            const modelExists = selectedProviderData.models.some(m => m.id === savedModelId);
+            
+            if (savedModelId && modelExists) {
+              // 如果有保存的模型ID并且该模型存在于当前提供商，使用保存的模型
+              setSelectedModel(savedModelId);
+              logService.info(`已恢复选中的模型ID: ${savedModelId}`);
+            } else if (selectedProviderData.defaultModelId) {
+              // 否则使用默认模型
               setSelectedModel(selectedProviderData.defaultModelId);
             } else if (selectedProviderData.models && selectedProviderData.models.length > 0) {
               setSelectedModel(selectedProviderData.models[0].id);
@@ -152,7 +160,10 @@ const ChatInterface: FC = () => {
     if (selectedModel && availableModels.length > 0) {
       const model = availableModels.find(m => m.id === selectedModel);
       setSelectedModelData(model || null);
-      logService.debug(`当前选中模型: ${model?.name || '未知'}`);
+      
+      // 保存选中的模型ID到本地存储
+      storageService.saveSelectedModelId(selectedModel);
+      logService.debug(`当前选中模型: ${model?.name || '未知'}, 已保存模型ID: ${selectedModel}`);
     } else {
       setSelectedModelData(null);
     }
@@ -529,15 +540,16 @@ const ChatInterface: FC = () => {
             )}
             
             {selectedModelData.features.reasoning && (
-              <Button
-                variant="outline"
-                size="icon"
-                className="h-8 w-8"
-                title="推理能力"
-                disabled={true}
-              >
-                <Brain className="h-4 w-4" />
-              </Button>
+              <div className="relative" title="推理能力">
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="h-8 w-8 opacity-70 cursor-not-allowed"
+                  disabled={true}
+                >
+                  <Brain className="h-4 w-4" />
+                </Button>
+              </div>
             )}
           </div>
         )}

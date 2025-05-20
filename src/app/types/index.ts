@@ -58,4 +58,43 @@ export type ProxySettings = {
   requiresAuth: boolean;
   username: string;
   password: string;
+};
+
+/**
+ * AI Agent类型定义
+ */
+export type Agent = {
+  id: string;
+  name: string;
+  description: string;
+  systemPrompt: string;
+  providerId: string;
+  modelId: string;
+  createdAt: Date;
+  updatedAt: Date;
+  // 是否保存上下文历史
+  keepHistory: boolean;
+  // 最大上下文历史消息数
+  maxHistoryMessages?: number;
+  // Agent图标
+  icon?: string;
+  // Agent设置
+  settings?: {
+    temperature?: number;
+    topP?: number;
+    maxTokens?: number;
+    [key: string]: number | string | boolean | undefined;
+  };
+};
+
+/**
+ * Agent会话类型定义
+ */
+export type AgentSession = {
+  id: string;
+  agentId: string;
+  name: string;
+  messages: Message[];
+  createdAt: Date;
+  updatedAt: Date;
 }; 
