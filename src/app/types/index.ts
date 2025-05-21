@@ -58,7 +58,7 @@ export type ProxySettings = {
   requiresAuth: boolean;
   username: string;
   password: string;
-};
+}; 
 
 /**
  * AI Agent类型定义
@@ -97,4 +97,55 @@ export type AgentSession = {
   messages: Message[];
   createdAt: Date;
   updatedAt: Date;
+}; 
+
+/**
+ * 场景类型定义
+ */
+export type Scene = {
+  id: string;
+  name: string;
+  description: string;
+  scenarioPrompt: string; // 场景背景提示词
+  participants: SceneParticipant[];
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+/**
+ * 场景参与者类型定义
+ */
+export type SceneParticipant = {
+  id: string; // 唯一标识，不同于agentId
+  agentId: string;
+  role: string; // 在场景中的角色名称
+  contextPrompt: string; // 场景特定提示词（会与Agent的基础systemPrompt合并）
+  interactionRules?: string; // 与其他Agent交互规则
+  order?: number; // 交互顺序，可选
+};
+
+/**
+ * 场景会话类型定义
+ */
+export type SceneSession = {
+  id: string;
+  sceneId: string;
+  name: string;
+  messages: SceneMessage[];
+  createdAt: Date;
+  updatedAt: Date;
+  isActive: boolean;
+};
+
+/**
+ * 场景消息类型定义
+ */
+export type SceneMessage = {
+  id: string;
+  participantId: string; // 场景参与者ID，包括用户
+  agentId?: string; // 原始Agent ID
+  role: 'user' | 'agent'; // 用户或Agent
+  content: string;
+  timestamp: Date;
+  metadata?: Record<string, string | boolean | number | null>;
 }; 

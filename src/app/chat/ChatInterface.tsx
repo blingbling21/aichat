@@ -541,14 +541,14 @@ const ChatInterface: FC = () => {
             
             {selectedModelData.features.reasoning && (
               <div className="relative" title="推理能力">
-                <Button
-                  variant="outline"
-                  size="icon"
+              <Button
+                variant="outline"
+                size="icon"
                   className="h-8 w-8 opacity-70 cursor-not-allowed"
-                  disabled={true}
-                >
-                  <Brain className="h-4 w-4" />
-                </Button>
+                disabled={true}
+              >
+                <Brain className="h-4 w-4" />
+              </Button>
               </div>
             )}
           </div>

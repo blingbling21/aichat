@@ -1,4 +1,4 @@
-import { AIProvider, Message, ProxySettings } from '../types';
+import { AIProvider, Message, ProxySettings, Agent, SceneParticipant, SceneMessage, Scene } from '../types';
 import { storageService } from './storage';
 import { logService } from './log';
 
@@ -236,7 +236,8 @@ class AIService {
     proxySettings: ProxySettings,
     history?: { role: 'user' | 'assistant'; content: string }[],
     modelId?: string,
-    isStream: boolean = false
+    isStream: boolean = false,
+    systemPrompt?: string
   ): Promise<string> {
     // 根据Provider的name判断使用哪种API格式
     let response;
@@ -288,15 +289,26 @@ class AIService {
     // 根据不同的AI提供商构建不同的请求体
     if (provider.name.toLowerCase().includes('openai') || provider.name.toLowerCase().includes('chatgpt')) {
       // OpenAI API格式
+      const messages = [];
+      
+      // 添加系统提示词（如果有）
+      if (systemPrompt) {
+        messages.push({
+          role: 'system',
+          content: systemPrompt
+        });
+      }
+      
+      // 添加历史消息和当前消息
+      messages.push(...(history || []),
+      {
+        role: 'user',
+        content: message
+      });
+      
       options.body = JSON.stringify({
         model: modelId || 'gpt-3.5-turbo', // 使用传入的模型ID或默认模型
-        messages: [
-          ...(history || []),
-          {
-            role: 'user',
-            content: message
-          }
-        ],
+        messages: messages,
         temperature: 0.7,
         stream: false // 非流式模式
       });
@@ -466,7 +478,8 @@ class AIService {
     onUpdate: (content: string, done: boolean, error?: boolean, reasoningContent?: string) => void,
     abortSignal: AbortSignal,
     history?: { role: 'user' | 'assistant'; content: string }[],
-    modelId?: string
+    modelId?: string,
+    systemPrompt?: string
   ): Promise<void> {
     // 准备请求选项
     const options: RequestInit = {
@@ -511,15 +524,26 @@ class AIService {
       // 根据不同的AI提供商构建不同的请求体和处理流式响应
       if (provider.name.toLowerCase().includes('openai') || provider.name.toLowerCase().includes('chatgpt')) {
         // OpenAI API流式格式
+        const messages = [];
+        
+        // 添加系统提示词（如果有）
+        if (systemPrompt) {
+          messages.push({
+            role: 'system',
+            content: systemPrompt
+          });
+        }
+        
+        // 添加历史消息和当前消息
+        messages.push(...(history || []),
+        {
+          role: 'user',
+          content: message
+        });
+        
         options.body = JSON.stringify({
           model: modelId || 'gpt-3.5-turbo',
-          messages: [
-            ...(history || []),
-            {
-              role: 'user',
-              content: message
-            }
-          ],
+          messages: messages,
           temperature: 0.7,
           stream: true // 启用流式返回
         });
@@ -966,6 +990,341 @@ class AIService {
    */
   getAvailableProviders(): AIProvider[] {
     return storageService.getProviders();
+  }
+
+  /**
+   * 发送场景消息
+   * 处理多Agent交互场景中的消息流转
+   */
+  async sendSceneMessage(
+    sceneId: string,
+    sessionId: string,
+    content: string,
+    participantId: string = 'user', // 默认为用户消息
+    onAgentResponse?: (participantId: string, content: string, done: boolean, error?: boolean) => void
+  ): Promise<SceneMessage[]> {
+    try {
+      // 获取场景信息
+      const scene = storageService.getScene(sceneId);
+      if (!scene) {
+        throw new Error(`找不到场景: ${sceneId}`);
+      }
+
+      // 获取场景会话
+      let session = storageService.getSceneSession(sessionId);
+      if (!session) {
+        // 如果会话不存在，创建新会话
+        session = {
+          id: sessionId,
+          sceneId,
+          name: `${scene.name} 会话 ${new Date().toLocaleString()}`,
+          messages: [],
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          isActive: true
+        };
+      }
+
+      // 添加用户消息
+      const userMessage: SceneMessage = {
+        id: Date.now().toString(),
+        participantId,
+        role: participantId === 'user' ? 'user' : 'agent',
+        content,
+        timestamp: new Date()
+      };
+      
+      session.messages.push(userMessage);
+      session.updatedAt = new Date();
+      storageService.saveSceneSession(session);
+
+      // 如果是用户消息，需要触发所有参与者的回复
+      if (participantId === 'user') {
+        const newMessages: SceneMessage[] = [userMessage];
+        
+        // 按照顺序（如果有）获取参与者
+        const participants = [...scene.participants].sort((a, b) => 
+          (a.order || Infinity) - (b.order || Infinity)
+        );
+        
+        // 依次让每个参与者回复
+        for (const participant of participants) {
+          try {
+            const agent = storageService.getAgent(participant.agentId);
+            if (!agent) {
+              continue;
+            }
+            
+            // 构建完整的上下文提示词
+            const combinedPrompt = this.buildAgentScenePrompt(scene, participant, agent);
+            
+            // 构建消息历史
+            const messageHistory = this.buildSceneMessageHistory(scene, session, participant);
+            
+            // 发送消息给当前Agent
+            const agentMessage = await this.processAgentInScene(
+              combinedPrompt,
+              messageHistory,
+              agent,
+              participant,
+              (content, done, error) => {
+                if (onAgentResponse) {
+                  onAgentResponse(participant.id, content, done, error);
+                }
+              }
+            );
+            
+            // 添加Agent回复到会话
+            const agentSceneMessage: SceneMessage = {
+              id: Date.now().toString(),
+              participantId: participant.id,
+              agentId: participant.agentId,
+              role: 'agent',
+              content: agentMessage.content,
+              timestamp: new Date(),
+              metadata: {
+                agentName: agent.name,
+                role: participant.role
+              }
+            };
+            
+            session.messages.push(agentSceneMessage);
+            newMessages.push(agentSceneMessage);
+            
+            // 更新会话
+            session.updatedAt = new Date();
+            storageService.saveSceneSession(session);
+          } catch (error) {
+            logService.error(`场景 ${scene.name} 中Agent ${participant.role} 处理消息失败:`, error);
+            
+            // 添加错误消息
+            const errorMessage: SceneMessage = {
+              id: Date.now().toString(),
+              participantId: participant.id,
+              agentId: participant.agentId,
+              role: 'agent',
+              content: `处理消息时发生错误: ${error instanceof Error ? error.message : '未知错误'}`,
+              timestamp: new Date(),
+              metadata: {
+                error: true
+              }
+            };
+            
+            session.messages.push(errorMessage);
+            newMessages.push(errorMessage);
+            
+            // 更新会话
+            session.updatedAt = new Date();
+            storageService.saveSceneSession(session);
+          }
+        }
+        
+        return newMessages;
+      }
+      
+      return [userMessage];
+    } catch (error) {
+      logService.error('场景消息处理错误:', error);
+      throw error;
+    }
+  }
+  
+  /**
+   * 构建Agent在场景中使用的提示词
+   */
+  private buildAgentScenePrompt(scene: Scene, participant: SceneParticipant, agent: Agent): string {
+    // 组合场景背景、参与者角色和Agent基础系统提示词
+    let prompt = `## 场景背景\n${scene.scenarioPrompt}\n\n`;
+    
+    prompt += `## 你的角色\n你是"${participant.role}"。\n${participant.contextPrompt}\n\n`;
+    
+    if (participant.interactionRules) {
+      prompt += `## 交互规则\n${participant.interactionRules}\n\n`;
+    }
+    
+    prompt += `## 基础指令\n${agent.systemPrompt}`;
+    
+    return prompt;
+  }
+  
+  /**
+   * 构建场景消息历史
+   */
+  private buildSceneMessageHistory(
+    scene: Scene, 
+    session: { messages: SceneMessage[] }, 
+    currentParticipant: SceneParticipant
+  ): { role: 'user' | 'assistant'; content: string; }[] {
+    const history: { role: 'user' | 'assistant'; content: string; }[] = [];
+    const messages = [...session.messages]; // 创建副本以免修改原始数据
+    
+    // 将场景消息转换为标准的历史记录格式
+    for (const message of messages) {
+      // 角色确定：
+      // 1. 当前参与者的消息是assistant
+      // 2. 其他消息是user
+      const role = message.participantId === currentParticipant.id ? 'assistant' : 'user';
+      
+      // 添加发送者标识，除非是当前参与者自己的消息
+      let content = message.content;
+      if (role === 'user') {
+        // 查找发送者的角色名称
+        let sender = '用户';
+        if (message.participantId !== 'user') {
+          const senderParticipant = scene.participants.find(p => p.id === message.participantId);
+          if (senderParticipant) {
+            sender = senderParticipant.role;
+          }
+        }
+        content = `[${sender}]: ${content}`;
+      }
+      
+      history.push({ role, content });
+    }
+    
+    return history;
+  }
+  
+  /**
+   * 在场景中处理Agent的响应
+   */
+  private async processAgentInScene(
+    systemPrompt: string,
+    messageHistory: { role: 'user' | 'assistant'; content: string; }[],
+    agent: Agent,
+    participant: SceneParticipant,
+    onUpdate?: (content: string, done: boolean, error?: boolean) => void
+  ): Promise<Message> {
+    try {
+      // 查找提供商和模型
+      const provider = storageService.getProviders().find(p => p.id === agent.providerId);
+      if (!provider) {
+        throw new Error(`找不到提供商: ${agent.providerId}`);
+      }
+      
+      const modelId = agent.modelId;
+      
+      // 获取最后一条用户消息
+      const lastUserMsg = [...messageHistory].reverse().find(msg => msg.role === 'user');
+      if (!lastUserMsg) {
+        throw new Error('没有找到用户消息');
+      }
+      
+      const proxySettings = storageService.getProxySettings();
+      
+      // 准备API请求选项
+      const message = lastUserMsg.content;
+      
+      // 非流式调用
+      let response = "";
+      
+      if (onUpdate) {
+        // 流式调用
+        await this.streamCallWithSystemPrompt(
+          message,
+          systemPrompt,
+          provider,
+          proxySettings,
+          (content, done, error) => {
+            onUpdate(content, done, error);
+            if (done && !error) {
+              response = content;
+            }
+          },
+          messageHistory.slice(0, -1), // 不包括最后一条用户消息
+          modelId
+        );
+      } else {
+        // 非流式调用
+        response = await this.callWithSystemPrompt(
+          message,
+          systemPrompt,
+          provider,
+          proxySettings,
+          messageHistory.slice(0, -1),
+          modelId
+        );
+      }
+      
+      return {
+        id: Date.now().toString(),
+        content: response,
+        role: 'assistant',
+        timestamp: new Date()
+      };
+    } catch (error) {
+      logService.error(`场景中Agent ${participant.role} 处理消息失败:`, error);
+      return {
+        id: Date.now().toString(),
+        content: `处理消息时发生错误: ${error instanceof Error ? error.message : '未知错误'}`,
+        role: 'assistant',
+        timestamp: new Date()
+      };
+    }
+  }
+  
+  /**
+   * 使用系统提示词调用AI
+   */
+  private async callWithSystemPrompt(
+    message: string,
+    systemPrompt: string,
+    provider: AIProvider,
+    proxySettings: ProxySettings,
+    history?: { role: 'user' | 'assistant'; content: string }[],
+    modelId?: string
+  ): Promise<string> {
+    // 这里简化实现，复用现有方法
+    // 实际实现可能需要根据不同模型支持系统提示词的方式进行调整
+    return this.callAI(
+      message,
+      provider,
+      proxySettings,
+      history,
+      modelId,
+      false,
+      systemPrompt
+    );
+  }
+  
+  /**
+   * 流式使用系统提示词调用AI
+   */
+  private async streamCallWithSystemPrompt(
+    message: string,
+    systemPrompt: string,
+    provider: AIProvider,
+    proxySettings: ProxySettings,
+    onUpdate: (content: string, done: boolean, error?: boolean, reasoningContent?: string) => void,
+    history?: { role: 'user' | 'assistant'; content: string }[],
+    modelId?: string
+  ): Promise<void> {
+    // 创建新的AbortController
+    if (this.currentStreamController) {
+      this.currentStreamController.abort();
+    }
+    this.currentStreamController = new AbortController();
+    
+    try {
+      await this.streamCallAI(
+        message,
+        provider,
+        proxySettings,
+        onUpdate,
+        this.currentStreamController.signal,
+        history,
+        modelId,
+        systemPrompt
+      );
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        onUpdate('生成已被中断', true, true);
+      } else {
+        onUpdate(`发生错误: ${error instanceof Error ? error.message : '未知错误'}`, true, true);
+      }
+    } finally {
+      this.currentStreamController = null;
+    }
   }
 }
 

@@ -3,13 +3,13 @@
 import { FC } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { MessageSquare, Settings, Users } from 'lucide-react';
+import { MessageSquare, Settings, Users, Layers } from 'lucide-react';
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 
 /**
  * 侧边栏导航组件
- * 包含聊天、AI代理和设置三个导航项
+ * 包含聊天、AI代理、场景和设置导航项
  */
 const Sidebar: FC = () => {
   const pathname = usePathname();
@@ -25,6 +25,11 @@ const Sidebar: FC = () => {
       name: 'AI代理',
       path: '/agents',
       icon: <Users size={24} />
+    },
+    {
+      name: '场景',
+      path: '/scenes',
+      icon: <Layers size={24} />
     },
     {
       name: '设置',
