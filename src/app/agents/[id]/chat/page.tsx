@@ -2,7 +2,7 @@
 
 import { FC, useState, useRef, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { Send, Loader2, Square, ArrowLeft, MessageSquare, Settings } from 'lucide-react';
+import { Send, Loader2, Square, ArrowLeft, MessageSquare, Settings, Trash2 } from 'lucide-react';
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
@@ -52,7 +52,16 @@ const AgentChatPage: FC = () => {
       );
       const latestSession = sortedSessions[0];
       setCurrentSession(latestSession.id);
-      setMessages(latestSession.messages);
+      
+      // 确保历史消息的streaming状态为false，并过滤掉空内容的消息
+      const cleanedMessages = latestSession.messages
+        .filter(msg => msg.content.trim() !== '' || msg.streaming) // 过滤掉空内容的非流式消息
+        .map(msg => ({
+          ...msg,
+          streaming: false
+        }));
+      
+      setMessages(cleanedMessages);
       logService.info(`已加载会话: ${latestSession.name}`);
     }
   }, [agentId, router]);
@@ -233,8 +242,50 @@ const AgentChatPage: FC = () => {
     const session = storageService.getAgentSession(sessionId);
     if (session) {
       setCurrentSession(sessionId);
-      setMessages(session.messages);
+      
+      // 确保历史消息的streaming状态为false，并过滤掉空内容的消息
+      const cleanedMessages = session.messages
+        .filter(msg => msg.content.trim() !== '' || msg.streaming) // 过滤掉空内容的非流式消息
+        .map(msg => ({
+          ...msg,
+          streaming: false
+        }));
+      
+      setMessages(cleanedMessages);
       logService.info(`已切换到会话: ${session.name}`);
+    }
+  };
+  
+  // 删除会话
+  const handleDeleteSession = (sessionId: string, event: React.MouseEvent) => {
+    // 阻止事件冒泡，避免触发切换会话
+    event.stopPropagation();
+    
+    if (window.confirm('确定要删除这个对话吗？此操作无法撤销。')) {
+      // 从存储中删除会话
+      storageService.deleteAgentSession(sessionId);
+      
+      // 更新本地会话列表
+      setSessions(prev => prev.filter(s => s.id !== sessionId));
+      
+      // 如果删除的是当前会话，需要切换到其他会话或清空
+      if (currentSession === sessionId) {
+        const remainingSessions = sessions.filter(s => s.id !== sessionId);
+        if (remainingSessions.length > 0) {
+          // 切换到最新的会话
+          const latestSession = remainingSessions.sort(
+            (a, b) => b.updatedAt.getTime() - a.updatedAt.getTime()
+          )[0];
+          handleSwitchSession(latestSession.id);
+        } else {
+          // 没有其他会话了，清空当前状态
+          setCurrentSession(null);
+          setMessages([]);
+        }
+      }
+      
+      logService.info(`已删除会话: ${sessionId}`);
+      toast.success('对话已删除');
     }
   };
   
@@ -310,12 +361,23 @@ const AgentChatPage: FC = () => {
                   {sessions.map(session => (
                     <div 
                       key={session.id}
-                      className={`p-2 rounded-md cursor-pointer text-sm truncate hover:bg-gray-100 dark:hover:bg-gray-800 ${
+                      className={`group relative p-2 rounded-md cursor-pointer text-sm hover:bg-gray-100 dark:hover:bg-gray-800 ${
                         currentSession === session.id ? 'bg-gray-100 dark:bg-gray-800' : ''
                       }`}
                       onClick={() => handleSwitchSession(session.id)}
                     >
-                      {session.name}
+                      <div className="flex items-center justify-between">
+                        <span className="truncate flex-1 pr-2">{session.name}</span>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="opacity-0 group-hover:opacity-100 h-6 w-6 p-0 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20"
+                          onClick={(event) => handleDeleteSession(session.id, event)}
+                          title="删除对话"
+                        >
+                          <Trash2 size={12} />
+                        </Button>
+                      </div>
                     </div>
                   ))}
                 </div>

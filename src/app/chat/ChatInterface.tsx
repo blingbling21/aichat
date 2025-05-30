@@ -45,11 +45,14 @@ const ChatInterface: FC = () => {
       const savedMessages = localStorage.getItem('chatHistory');
       if (savedMessages) {
         const parsedMessages = JSON.parse(savedMessages);
-        // 确保timestamp是Date对象
-        setMessages(parsedMessages.map((msg: Omit<Message, 'timestamp'> & { timestamp: string }) => ({
-          ...msg,
-          timestamp: new Date(msg.timestamp)
-        })));
+        // 确保timestamp是Date对象，清除streaming状态，并过滤掉空内容的消息
+        setMessages(parsedMessages
+          .filter((msg: Omit<Message, 'timestamp'> & { timestamp: string }) => msg.content && msg.content.trim() !== '') // 过滤掉空内容的消息
+          .map((msg: Omit<Message, 'timestamp'> & { timestamp: string }) => ({
+            ...msg,
+            timestamp: new Date(msg.timestamp),
+            streaming: false // 确保历史消息不显示为正在生成状态
+          })));
         logService.info(`已加载 ${parsedMessages.length} 条聊天历史记录`);
       } else {
         logService.info('没有找到聊天历史记录');
