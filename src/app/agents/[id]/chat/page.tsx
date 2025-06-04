@@ -346,7 +346,17 @@ const AgentChatPage: FC = () => {
           </div>
           
           {agent && (
-            <p className="text-sm text-gray-500 mt-1">{agent.description}</p>
+            <div className="flex items-center gap-4 text-sm text-gray-500 mt-1">
+              <span>{agent.description}</span>
+              <div className="flex items-center gap-2">
+                {agent.isStreamMode && <span className="bg-green-100 text-green-700 px-2 py-1 rounded-full text-xs">流式模式</span>}
+                {agent.temperature !== undefined && (
+                  <span className="bg-blue-100 text-blue-700 px-2 py-1 rounded-full text-xs">
+                    温度: {agent.temperature}
+                  </span>
+                )}
+              </div>
+            </div>
           )}
         </div>
         

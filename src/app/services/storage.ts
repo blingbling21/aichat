@@ -154,6 +154,34 @@ class StorageService {
   }
 
   /**
+   * 获取流式模式设置
+   */
+  getStreamMode(): boolean {
+    try {
+      if (!isBrowser) return true; // 默认启用流式模式
+      
+      const streamMode = localStorage.getItem('streamMode');
+      return streamMode !== null ? streamMode === 'true' : true;
+    } catch (error) {
+      logService.error('获取流式模式设置失败:', error);
+      return true;
+    }
+  }
+
+  /**
+   * 保存流式模式设置
+   */
+  saveStreamMode(enabled: boolean): void {
+    try {
+      if (!isBrowser) return;
+      
+      localStorage.setItem('streamMode', String(enabled));
+    } catch (error) {
+      logService.error('保存流式模式设置失败:', error);
+    }
+  }
+
+  /**
    * 获取所有AI Agent
    */
   getAgents(): Agent[] {

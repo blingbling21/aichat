@@ -1,6 +1,14 @@
-import { AIProvider, Message, ProxySettings, Agent, SceneParticipant, SceneMessage, Scene } from '../types';
+import { AIProvider, Message, ProxySettings, Agent, SceneParticipant, SceneMessage, Scene, CustomAPIConfig, APIBodyFieldConfig, APIResponseConfig } from '../types';
 import { storageService } from './storage';
 import { logService } from './log';
+
+/**
+ * AI响应结果类型
+ */
+type AIResponse = {
+  content: string;
+  reasoningContent?: string;
+};
 
 /**
  * AI服务类
@@ -99,7 +107,8 @@ class AIService {
     message: string, 
     providerId?: string,
     history?: { role: 'user' | 'assistant'; content: string }[],
-    modelId?: string
+    modelId?: string,
+    temperature?: number
   ): Promise<Message> {
     try {
       // 获取选中的提供商
@@ -132,13 +141,14 @@ class AIService {
       const proxySettings = storageService.getProxySettings();
       
       // 调用真实的API
-      const response = await this.callAI(message, provider, proxySettings, history, actualModelId, false);
+      const response = await this.callAIWithReasoning(message, provider, proxySettings, history, actualModelId, false, undefined, temperature);
       
       return {
         id: Date.now().toString(),
-        content: response,
+        content: response.content,
         role: 'assistant',
-        timestamp: new Date()
+        timestamp: new Date(),
+        reasoningContent: response.reasoningContent
       };
     } catch (error) {
       logService.error('AI服务错误', error);
@@ -158,13 +168,15 @@ class AIService {
    * @param providerId 提供商ID
    * @param history 聊天历史
    * @param modelId 模型ID
+   * @param temperature 温度参数
    */
   async sendMessageStream(
     message: string,
     onUpdate: (content: string, done: boolean, error?: boolean, reasoningContent?: string) => void,
     providerId?: string,
     history?: { role: 'user' | 'assistant'; content: string }[],
-    modelId?: string
+    modelId?: string,
+    temperature?: number
   ): Promise<void> {
     // 如果有正在进行的请求，先取消
     if (this.currentStreamController) {
@@ -210,7 +222,8 @@ class AIService {
         onUpdate,
         this.currentStreamController.signal,
         history, 
-        actualModelId
+        actualModelId,
+        temperature
       );
     } catch (error) {
       logService.error('AI服务流式错误', error);
@@ -228,7 +241,385 @@ class AIService {
   }
   
   /**
-   * 真实的API调用
+   * 根据自定义配置构建API请求
+   */
+  private buildCustomAPIRequest(
+    config: CustomAPIConfig,
+    provider: AIProvider, 
+    message: string,
+    history?: { role: 'user' | 'assistant'; content: string }[],
+    modelId?: string,
+    systemPrompt?: string,
+    isStream?: boolean,
+    temperature?: number
+  ): { url: string; options: RequestInit } {
+    logService.info(`buildCustomAPIRequest被调用，bodyFields数量: ${config.bodyFields.length}`);
+    
+    // 专门记录温度参数
+    if (temperature !== undefined) {
+      logService.info(`⚡ 温度参数传递: ${temperature}`);
+    } else {
+      logService.info(`⚡ 温度参数未设置，将使用默认值`);
+    }
+    
+    const options: RequestInit = {
+      method: config.method,
+      headers: {
+        'Content-Type': config.contentType,
+      },
+    };
+
+    // 构建请求头
+    const headers: Record<string, string> = {
+      'Content-Type': config.contentType,
+    };
+
+    for (const headerConfig of config.headers) {
+      let headerValue: string = headerConfig.value;
+      
+      // 处理模板
+      if (headerConfig.valueTemplate) {
+        const templateResult = this.processTemplate(headerConfig.valueTemplate, {
+          apiKey: provider.apiKey,
+          model: modelId,
+          endpoint: provider.apiEndpoint
+        });
+        headerValue = String(templateResult);
+      }
+      
+      headers[headerConfig.key] = headerValue;
+    }
+
+    options.headers = headers;
+
+    // 构建请求体
+    if (config.method === 'POST' || config.method === 'PUT') {
+      const body: Record<string, unknown> = {};
+      
+      logService.info(`开始构建请求体，字段数量: ${config.bodyFields.length}`);
+      
+      for (const fieldConfig of config.bodyFields) {
+        logService.info(`处理字段: ${fieldConfig.path}, 类型: ${fieldConfig.valueType}`);
+        
+        const value = this.buildFieldValue(fieldConfig, {
+          message,
+          history,
+          modelId,
+          systemPrompt,
+          isStream,
+          provider,
+          temperature: temperature
+        });
+        
+        if (value !== undefined && value !== null) {
+          this.setNestedValue(body, fieldConfig.path, value);
+          logService.info(`✓ 字段 ${fieldConfig.path} 已设置`);
+          } else {
+          logService.error(`✗ 字段 ${fieldConfig.path} 值为空`);
+        }
+      }
+      
+      logService.info(`请求体字段: ${Object.keys(body).join(', ')}`);
+      options.body = JSON.stringify(body);
+    }
+
+    return {
+      url: provider.apiEndpoint,
+      options
+    };
+  }
+
+  /**
+   * 处理模板字符串，支持类型转换
+   */
+  private processTemplate(template: string, variables: Record<string, unknown>): unknown {
+    let result = template;
+    
+    for (const [key, value] of Object.entries(variables)) {
+      const regex = new RegExp(`\\{${key}\\}`, 'g');
+      result = result.replace(regex, String(value || ''));
+    }
+    
+    // 特殊处理：如果整个模板就是一个变量，进行类型转换
+    if (template.match(/^\{[^}]+\}$/)) {
+      const varName = template.slice(1, -1); // 去掉大括号
+      const varValue = variables[varName];
+      
+      // 特殊处理：model字段总是返回字符串
+      if (varName === 'model') {
+        return String(varValue || '');
+      }
+      
+      // 特殊处理：stream字段返回布尔值
+      if (varName === 'stream') {
+        if (typeof varValue === 'boolean') {
+          return varValue;
+        }
+        if (varValue === 'true') return true;
+        if (varValue === 'false') return false;
+        return Boolean(varValue);
+      }
+      
+      // 其他字段：如果是布尔值，返回布尔类型
+      if (typeof varValue === 'boolean') {
+        return varValue;
+      }
+      
+      // 其他字段：如果是数字，返回数字类型（除了看起来像ID的）
+      if (typeof varValue === 'number') {
+        // 如果数字很大（像时间戳），可能是ID，转为字符串
+        if (varValue > 1000000000) {
+          return String(varValue);
+        }
+        return varValue;
+      }
+      
+      // 特殊处理字符串形式的布尔值
+      if (varValue === 'true') return true;
+      if (varValue === 'false') return false;
+      
+      // 特殊处理字符串形式的数字（小数字才转换）
+      if (typeof varValue === 'string' && !isNaN(Number(varValue)) && varValue.trim() !== '' && Number(varValue) < 1000000000) {
+        return Number(varValue);
+      }
+    }
+    
+    return result;
+  }
+
+  /**
+   * 构建字段值
+   */
+  private buildFieldValue(
+    fieldConfig: APIBodyFieldConfig,
+    context: {
+      message: string;
+      history?: { role: 'user' | 'assistant'; content: string }[];
+      modelId?: string;
+      systemPrompt?: string;
+      isStream?: boolean;
+      provider: AIProvider;
+      temperature?: number;
+    }
+  ): unknown {
+    switch (fieldConfig.valueType) {
+      case 'static':
+        return fieldConfig.value;
+        
+      case 'template':
+        if (!fieldConfig.valueTemplate) return '';
+        const templateResult = this.processTemplate(fieldConfig.valueTemplate, {
+          message: context.message,
+          model: context.modelId,
+          stream: context.isStream,
+          apiKey: context.provider.apiKey,
+          systemPrompt: context.systemPrompt,
+          temperature: context.temperature || 0.7
+        });
+        
+        // 特殊日志：如果是stream字段，记录详细信息
+        if (fieldConfig.path === 'stream') {
+          logService.info(`Stream字段处理: 模板="${fieldConfig.valueTemplate}", context.isStream=${context.isStream}, 结果=${templateResult}`);
+        }
+        
+        // 特殊日志：如果是温度字段，记录详细信息
+        if (fieldConfig.path.toLowerCase().includes('temperature')) {
+          logService.info(`Temperature字段处理: 模板="${fieldConfig.valueTemplate}", context.temperature=${context.temperature}, 结果=${templateResult}`);
+        }
+        
+        return templateResult;
+        
+      case 'dynamic':
+        // 处理动态值，如构建消息数组
+        if (fieldConfig.path === 'messages') {
+          logService.debug('开始构建动态messages字段');
+          const messages: { role: string; content: string }[] = [];
+          
+          // 添加系统提示词
+          if (context.systemPrompt) {
+          messages.push({
+            role: 'system',
+              content: context.systemPrompt
+            });
+            logService.debug('添加了系统提示词消息');
+          }
+          
+          // 添加历史消息（注意：history中已经包含了当前用户消息，不需要单独添加）
+          if (context.history) {
+            messages.push(...context.history);
+            logService.debug(`添加了 ${context.history.length} 条历史消息（包含当前消息）`);
+            // 详细记录每条历史消息
+            context.history.forEach((msg, index) => {
+              logService.info(`历史消息[${index}] ${msg.role}: ${msg.content.substring(0, 100)}${msg.content.length > 100 ? '...' : ''}`);
+            });
+          } else {
+            // 如果没有历史记录，则添加当前消息
+            messages.push({
+          role: 'user',
+              content: context.message
+            });
+            logService.debug('没有历史记录，添加了当前用户消息');
+            logService.info(`当前消息: ${context.message}`);
+          }
+          
+          logService.debug(`动态messages字段最终包含 ${messages.length} 条消息`);
+          logService.info('=== 发送给AI的完整消息历史 ===');
+          messages.forEach((msg, index) => {
+            logService.info(`消息[${index}] ${msg.role}: ${msg.content}`);
+          });
+          logService.info('=== 消息历史结束 ===');
+          
+          return messages;
+        }
+        
+        logService.debug(`处理其他动态字段: ${fieldConfig.path}`);
+        // 其他动态值处理...
+        return fieldConfig.value;
+        
+      default:
+        return fieldConfig.value;
+    }
+  }
+
+  /**
+   * 设置嵌套对象值
+   */
+  private setNestedValue(obj: Record<string, unknown>, path: string, value: unknown): void {
+    const keys = path.split('.');
+    let current: Record<string, unknown> = obj;
+    
+    for (let i = 0; i < keys.length - 1; i++) {
+      const key = keys[i];
+      if (!(key in current)) {
+        current[key] = {};
+      }
+      current = current[key] as Record<string, unknown>;
+    }
+    
+    current[keys[keys.length - 1]] = value;
+  }
+
+  /**
+   * 从响应中提取内容
+   */
+  private extractResponseContent(response: unknown, config: APIResponseConfig): string {
+    const result = this.getNestedValue(response, config.contentPath);
+    return result ? String(result) : '';
+  }
+
+  /**
+   * 获取嵌套对象值
+   */
+  private getNestedValue(obj: unknown, path: string): unknown {
+    const keys = path.split('.');
+    let current = obj;
+    
+    for (const key of keys) {
+      if (key.includes('[') && key.includes(']')) {
+        // 处理数组索引，如 choices[0]
+        const arrayKey = key.substring(0, key.indexOf('['));
+        const index = parseInt(key.substring(key.indexOf('[') + 1, key.indexOf(']')));
+        
+        if (current && typeof current === 'object' && current !== null && arrayKey in current) {
+          const array = (current as Record<string, unknown>)[arrayKey];
+          if (Array.isArray(array)) {
+            current = array[index];
+          } else {
+            return null;
+          }
+        } else {
+          return null;
+        }
+      } else {
+        if (current && typeof current === 'object' && current !== null && key in current) {
+          current = (current as Record<string, unknown>)[key];
+        } else {
+          return null;
+        }
+      }
+    }
+    
+    return current;
+  }
+
+  /**
+   * 通用API调用（使用自定义配置）
+   */
+  private async callCustomAPI(
+    message: string,
+    provider: AIProvider,
+    proxySettings: ProxySettings,
+    history?: { role: 'user' | 'assistant'; content: string }[],
+    modelId?: string,
+    isStream: boolean = false,
+    systemPrompt?: string,
+    temperature?: number
+  ): Promise<AIResponse> {
+    if (!provider.customConfig) {
+      throw new Error('提供商缺少自定义API配置');
+    }
+
+    const { url, options } = this.buildCustomAPIRequest(
+      provider.customConfig,
+      provider,
+      message,
+      history,
+      modelId,
+      systemPrompt,
+      isStream,
+      temperature
+    );
+
+    logService.info(`调用自定义API: ${provider.name}, 流式模式: ${isStream}`);
+    logService.debug(`请求URL: ${url}`);
+    logService.debug(`请求选项: ${JSON.stringify(options, null, 2)}`);
+
+    const response = await fetch(url, options);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      let errorMessage = `API错误: ${response.status} - ${errorText}`;
+      
+      // 尝试使用自定义错误解析
+      if (provider.customConfig.response.errorConfig?.messagePath) {
+        try {
+          const errorData = JSON.parse(errorText);
+          const customError = this.getNestedValue(errorData, provider.customConfig.response.errorConfig.messagePath);
+          if (customError) {
+            errorMessage = `API错误: ${customError}`;
+          }
+        } catch {
+          // 忽略解析错误，使用默认错误信息
+        }
+      }
+      
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    logService.info(`收到非流式响应: ${JSON.stringify(data)}`);
+    
+    const extractedContent = this.extractResponseContent(data, provider.customConfig.response);
+    logService.info(`提取的内容: "${extractedContent}"`);
+    
+    // 提取推理内容（如果配置了）
+    let reasoningContent: string | undefined;
+    if (provider.customConfig.response.reasoningPath) {
+      const extractedReasoning = this.getNestedValue(data, provider.customConfig.response.reasoningPath);
+      if (extractedReasoning) {
+        reasoningContent = String(extractedReasoning);
+        logService.info(`提取的推理内容: "${reasoningContent}"`);
+      }
+    }
+    
+    return {
+      content: extractedContent,
+      reasoningContent
+    };
+  }
+
+  /**
+   * 修改后的callAI方法，强制使用自定义配置
    */
   private async callAI(
     message: string, 
@@ -239,237 +630,65 @@ class AIService {
     isStream: boolean = false,
     systemPrompt?: string
   ): Promise<string> {
-    // 根据Provider的name判断使用哪种API格式
-    let response;
+    logService.info(`callAI被调用，提供商: ${provider.name}，模型: ${modelId}`);
     
-    // 准备请求选项
-    const options: RequestInit = {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    };
-    
-    // 添加API密钥到请求头
-    if (provider.apiKey) {
-      // 根据不同的AI提供商添加不同的认证格式
-      if (provider.name.toLowerCase().includes('openai') || provider.name.toLowerCase().includes('chatgpt')) {
-        options.headers = {
-          ...options.headers,
-          'Authorization': `Bearer ${provider.apiKey}`
-        };
-      } else if (provider.name.toLowerCase().includes('claude') || provider.name.toLowerCase().includes('anthropic')) {
-        options.headers = {
-          ...options.headers,
-          'x-api-key': provider.apiKey,
-          'anthropic-version': '2023-06-01' // Claude API版本
-        };
-      } else {
-        // 默认使用Bearer认证
-        options.headers = {
-          ...options.headers,
-          'Authorization': `Bearer ${provider.apiKey}`
-        };
-      }
+    // 检查是否有自定义配置
+    if (!provider.customConfig) {
+      logService.error(`提供商 ${provider.name} 缺少自定义API配置`);
+      throw new Error(`提供商 ${provider.name} 尚未完成API配置。
+
+请按以下步骤操作：
+1. 进入"设置"页面
+2. 找到 ${provider.name} 提供商
+3. 点击"高级"按钮
+4. 根据 ${provider.name} 的API文档完成配置
+5. 保存配置后即可使用
+
+系统不再提供预设配置，需要您完全自主配置所有API参数。`);
     }
     
-    // 调试输出
-    logService.info(`发送消息到: ${provider.name}, 使用模型: ${modelId}`);
-    logService.debug(`API端点: ${provider.apiEndpoint}`);
-    logService.debug(`代理设置: ${proxySettings.enabled ? '已启用' : '未启用'}`);
+    logService.info(`找到自定义配置，bodyFields数量: ${provider.customConfig.bodyFields.length}`);
+    logService.info(`调用自定义配置API: ${provider.name}`);
+    return this.callCustomAPI(message, provider, proxySettings, history, modelId, isStream, systemPrompt).then(response => response.content);
+  }
+
+  /**
+   * 调用AI并返回完整响应（包含推理内容）
+   */
+  private async callAIWithReasoning(
+    message: string, 
+    provider: AIProvider, 
+    proxySettings: ProxySettings,
+    history?: { role: 'user' | 'assistant'; content: string }[],
+    modelId?: string,
+    isStream: boolean = false,
+    systemPrompt?: string,
+    temperature?: number
+  ): Promise<AIResponse> {
+    logService.info(`callAIWithReasoning被调用，提供商: ${provider.name}，模型: ${modelId}`);
     
-    // 注意：在浏览器环境中，代理设置通常需要在服务器端处理
-    // 或者使用特殊的代理配置扩展/中间件
-    // 这里记录代理信息，但实际应用可能需要通过后端API转发请求
-    if (proxySettings.enabled) {
-      logService.debug(`使用代理: ${proxySettings.host}:${proxySettings.port}`);
-      // 在Tauri应用中，可以考虑使用http客户端插件在Rust端处理代理
+    // 检查是否有自定义配置
+    if (!provider.customConfig) {
+      logService.error(`提供商 ${provider.name} 缺少自定义API配置`);
+      throw new Error(`提供商 ${provider.name} 尚未完成API配置。
+
+请按以下步骤操作：
+1. 进入"设置"页面
+2. 找到 ${provider.name} 提供商
+3. 点击"高级"按钮
+4. 根据 ${provider.name} 的API文档完成配置
+5. 保存配置后即可使用
+
+系统不再提供预设配置，需要您完全自主配置所有API参数。`);
     }
     
-    // 根据不同的AI提供商构建不同的请求体
-    if (provider.name.toLowerCase().includes('openai') || provider.name.toLowerCase().includes('chatgpt')) {
-      // OpenAI API格式
-      const messages = [];
-      
-      // 添加系统提示词（如果有）
-      if (systemPrompt) {
-        messages.push({
-          role: 'system',
-          content: systemPrompt
-        });
-      }
-      
-      // 添加历史消息和当前消息
-      messages.push(...(history || []),
-      {
-        role: 'user',
-        content: message
-      });
-      
-      options.body = JSON.stringify({
-        model: modelId || 'gpt-3.5-turbo', // 使用传入的模型ID或默认模型
-        messages: messages,
-        temperature: 0.7,
-        stream: false // 非流式模式
-      });
-      
-      const fetchResponse = await fetch(provider.apiEndpoint, options);
-      
-      if (!fetchResponse.ok) {
-        const errorText = await fetchResponse.text();
-        throw new Error(`OpenAI API错误: ${fetchResponse.status} - ${errorText}`);
-      }
-      
-      const data = await fetchResponse.json();
-      response = data.choices[0].message.content;
-      
-    } else if (provider.name.toLowerCase().includes('claude') || provider.name.toLowerCase().includes('anthropic')) {
-      // Claude/Anthropic API格式
-      options.body = JSON.stringify({
-        model: modelId || 'claude-2', // 使用传入的模型ID或默认模型
-        prompt: `\n\nHuman: ${message}\n\nAssistant:`,
-        max_tokens_to_sample: 1000,
-        stream: false // 非流式模式
-      });
-      
-      const fetchResponse = await fetch(provider.apiEndpoint, options);
-      
-      if (!fetchResponse.ok) {
-        const errorText = await fetchResponse.text();
-        throw new Error(`Claude API错误: ${fetchResponse.status} - ${errorText}`);
-      }
-      
-      const data = await fetchResponse.json();
-      response = data.completion;
-    
-    } else if (provider.name.toLowerCase().includes('deepseek')) {
-      logService.info(`modelId: ${modelId}`);
-      // 查找模型名称而不是使用ID
-      let modelName = 'deepseek-chat'; // 默认使用DeepSeek-V3
-      
-      // 尝试从提供商的模型列表中找到模型名称
-      if (modelId && provider.models) {
-        logService.info(`处理DeepSeek模型ID: ${modelId}, 类型: ${typeof modelId}`);
-        
-        const selectedModel = provider.models.find(m => m.id === modelId);
-        if (selectedModel) {
-          // 使用模型的name属性判断
-          const modelNameLower = selectedModel.name.toLowerCase();
-          if (modelNameLower.includes('reasoner') || modelNameLower.includes('r1') || 
-              selectedModel.id === 'deepseek-reasoner') {
-            modelName = 'deepseek-reasoner';
-          } else {
-            modelName = 'deepseek-chat';
-          }
-          
-          logService.info(`使用DeepSeek模型: ${modelName}, 模型名称: ${selectedModel.name}`);
-        } else {
-          logService.warn(`未找到匹配的DeepSeek模型: ${modelId}`);
-        }
-      }
-      
-      // 规范化消息历史，确保符合模型要求格式
-      const normalizedHistory = this.normalizeMessageHistory(history || [], modelName);
-      
-      // 对于deepseek-reasoner模型，进行特殊处理并添加日志
-      let messages = [];
-      if (modelName === 'deepseek-reasoner') {
-        // 如果历史为空，只添加当前用户消息
-        if (normalizedHistory.length === 0) {
-          messages = [{
-            role: 'user',
-            content: message
-          }];
-        } else {
-          // 使用规范化后的历史，不再重复添加用户消息
-          messages = normalizedHistory;
-          
-          // 如果最后一条消息是用户消息，和当前消息合并，避免连续的用户消息
-          const lastMsg = normalizedHistory[normalizedHistory.length - 1];
-          if (lastMsg && lastMsg.role === 'user') {
-            // 替换掉最后一条用户消息，内容为当前消息
-            messages[messages.length - 1] = {
-              role: 'user',
-              content: message
-            };
-          } else {
-            // 最后一条是助手消息，正常添加当前用户消息
-            messages.push({
-              role: 'user',
-              content: message
-            });
-          }
-        }
-      } else {
-        // 非deepseek-reasoner模型，正常处理
-        messages = [
-          ...normalizedHistory,
-          {
-            role: 'user',
-            content: message
-          }
-        ];
-      }
-      
-      // 记录实际发送的消息内容
-      logService.info(`DeepSeek ${modelName} 发送消息: ${JSON.stringify(messages)}`);
-      
-      // DeepSeek API格式 - 与OpenAI兼容
-      options.body = JSON.stringify({
-        model: modelName,
-        messages: messages,
-        stream: isStream,
-        temperature: 0.7
-      });
-      
-      // 确保使用正确的API端点
-      let apiEndpoint = provider.apiEndpoint;
-      if (!apiEndpoint || !apiEndpoint.startsWith('https://api.deepseek.com')) {
-        apiEndpoint = 'https://api.deepseek.com/chat/completions';
-        logService.warn(`DeepSeek API端点不正确，使用默认端点: ${apiEndpoint}`);
-      } else if (!apiEndpoint.includes('/chat/completions')) {
-        apiEndpoint = 'https://api.deepseek.com/chat/completions';
-        logService.warn(`DeepSeek API端点不完整，使用完整端点: ${apiEndpoint}`);
-      }
-      
-      const fetchResponse = await fetch(apiEndpoint, options);
-      
-      if (!fetchResponse.ok) {
-        const errorText = await fetchResponse.text();
-        throw new Error(`DeepSeek API错误: ${fetchResponse.status} - ${errorText}`);
-      }
-      
-      const data = await fetchResponse.json();
-      response = data.choices[0].message.content;
-      
-    } else {
-      // 通用API格式处理
-      // 假设格式为 { prompt: string, model: string }
-      options.body = JSON.stringify({
-        prompt: message,
-        model: modelId,
-        stream: false
-      });
-      
-      const fetchResponse = await fetch(provider.apiEndpoint, options);
-      
-      if (!fetchResponse.ok) {
-        const errorText = await fetchResponse.text();
-        throw new Error(`API错误: ${fetchResponse.status} - ${errorText}`);
-      }
-      
-      const data = await fetchResponse.json();
-      
-      // 尝试从响应中提取文本，根据可能的字段名
-      response = data.text || data.content || data.response || data.message || 
-                JSON.stringify(data);
-    }
-    
-    return response;
+    logService.info(`找到自定义配置，bodyFields数量: ${provider.customConfig.bodyFields.length}`);
+    logService.info(`调用自定义配置API: ${provider.name}`);
+    return this.callCustomAPI(message, provider, proxySettings, history, modelId, isStream, systemPrompt, temperature);
   }
   
   /**
-   * 流式API调用
+   * 流式API调用，强制使用自定义配置
    */
   private async streamCallAI(
     message: string, 
@@ -479,345 +698,42 @@ class AIService {
     abortSignal: AbortSignal,
     history?: { role: 'user' | 'assistant'; content: string }[],
     modelId?: string,
-    systemPrompt?: string
+    temperature?: number
   ): Promise<void> {
-    // 准备请求选项
-    const options: RequestInit = {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      signal: abortSignal, // 添加中断信号
-    };
+    logService.info(`streamCallAI被调用，提供商: ${provider.name}，模型: ${modelId}`);
     
-    // 添加API密钥到请求头
-    if (provider.apiKey) {
-      // 根据不同的AI提供商添加不同的认证格式
-      if (provider.name.toLowerCase().includes('openai') || provider.name.toLowerCase().includes('chatgpt')) {
-        options.headers = {
-          ...options.headers,
-          'Authorization': `Bearer ${provider.apiKey}`
-        };
-      } else if (provider.name.toLowerCase().includes('claude') || provider.name.toLowerCase().includes('anthropic')) {
-        options.headers = {
-          ...options.headers,
-          'x-api-key': provider.apiKey,
-          'anthropic-version': '2023-06-01' // Claude API版本
-        };
-      } else {
-        // 默认使用Bearer认证
-        options.headers = {
-          ...options.headers,
-          'Authorization': `Bearer ${provider.apiKey}`
-        };
-      }
+    // 检查是否有自定义配置
+    if (!provider.customConfig) {
+      logService.error(`提供商 ${provider.name} 缺少自定义API配置`);
+      throw new Error(`提供商 ${provider.name} 尚未完成API配置。
+
+请按以下步骤操作：
+1. 进入"设置"页面
+2. 找到 ${provider.name} 提供商
+3. 点击"高级"按钮
+4. 根据 ${provider.name} 的API文档完成配置
+5. 保存配置后即可使用
+
+系统不再提供预设配置，需要您完全自主配置所有API参数。`);
     }
-    
-    // 调试输出
-    logService.info(`流式发送消息到: ${provider.name}, 使用模型: ${modelId}`);
-    logService.debug(`API端点: ${provider.apiEndpoint}`);
-    
-    let fullResponse = '';
-    let reasoningFullResponse = ''; // 用于存储推理过程内容
-    
-    try {
-      // 根据不同的AI提供商构建不同的请求体和处理流式响应
-      if (provider.name.toLowerCase().includes('openai') || provider.name.toLowerCase().includes('chatgpt')) {
-        // OpenAI API流式格式
-        const messages = [];
-        
-        // 添加系统提示词（如果有）
-        if (systemPrompt) {
-          messages.push({
-            role: 'system',
-            content: systemPrompt
-          });
-        }
-        
-        // 添加历史消息和当前消息
-        messages.push(...(history || []),
-        {
-          role: 'user',
-          content: message
-        });
-        
-        options.body = JSON.stringify({
-          model: modelId || 'gpt-3.5-turbo',
-          messages: messages,
-          temperature: 0.7,
-          stream: true // 启用流式返回
-        });
-        
-        const response = await fetch(provider.apiEndpoint, options);
-        
-        if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(`OpenAI API错误: ${response.status} - ${errorText}`);
-        }
-        
-        if (!response.body) {
-          throw new Error('响应不包含数据流');
-        }
-        
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder('utf-8');
-        
-        // 处理数据流
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          
-          // 解码数据块
-          const chunk = decoder.decode(value, { stream: true });
-          
-          // 处理SSE格式数据
-          const lines = chunk
-            .split('\n')
-            .filter(line => line.trim() !== '' && line.trim() !== 'data: [DONE]');
-          
-          for (const line of lines) {
-            if (line.startsWith('data: ')) {
-              try {
-                const jsonData = JSON.parse(line.slice(6));
-                
-                // 提取增量内容
-                if (jsonData.choices && jsonData.choices[0].delta && jsonData.choices[0].delta.content) {
-                  const content = jsonData.choices[0].delta.content;
-                  fullResponse += content;
-                  onUpdate(fullResponse, false);
-                }
-                
-                // 提取推理内容
-                if (jsonData.choices && jsonData.choices[0].delta && jsonData.choices[0].delta.reasoning_content) {
-                  const reasoningContent = jsonData.choices[0].delta.reasoning_content;
-                  reasoningFullResponse += reasoningContent;
-                  logService.debug(`收到推理内容: ${reasoningContent}`);
-                  onUpdate(fullResponse, false, false, reasoningFullResponse);
-                }
-              } catch (e) {
-                console.error('解析SSE数据错误:', e);
-              }
-            }
-          }
-        }
-        
-        // 流式传输完成
-        onUpdate(fullResponse, true, false, reasoningFullResponse);
-        
-      } else if (provider.name.toLowerCase().includes('claude') || provider.name.toLowerCase().includes('anthropic')) {
-        // Claude API流式格式
-        options.body = JSON.stringify({
-          model: modelId || 'claude-2',
-          prompt: `\n\nHuman: ${message}\n\nAssistant:`,
-          max_tokens_to_sample: 1000,
-          stream: true
-        });
-        
-        const response = await fetch(provider.apiEndpoint, options);
-        
-        if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(`Claude API错误: ${response.status} - ${errorText}`);
-        }
-        
-        if (!response.body) {
-          throw new Error('响应不包含数据流');
-        }
-        
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder('utf-8');
-        
-        // 处理数据流
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          
-          // 解码数据块
-          const chunk = decoder.decode(value, { stream: true });
-          
-          // 处理SSE格式数据
-          const lines = chunk
-            .split('\n')
-            .filter(line => line.trim() !== '' && line.trim() !== 'event: done');
-          
-          for (const line of lines) {
-            if (line.startsWith('data: ')) {
-              try {
-                const jsonData = JSON.parse(line.slice(6));
-                
-                // 提取增量内容
-                if (jsonData.completion) {
-                  fullResponse = jsonData.completion; // Claude返回完整的响应而不是增量
-                  onUpdate(fullResponse, false);
-                }
-              } catch (e) {
-                console.error('解析Claude SSE数据错误:', e);
-              }
-            }
-          }
-        }
-        
-        // 流式传输完成
-        onUpdate(fullResponse, true, false, reasoningFullResponse);
-        
-      } else if (provider.name.toLowerCase().includes('deepseek')) {
-        // 查找模型名称
-        let modelName = 'deepseek-chat'; // 默认使用DeepSeek-V3
-        
-        if (modelId && provider.models) {
-          logService.info(`处理DeepSeek模型ID: ${modelId}, 类型: ${typeof modelId}`);
-          
-          const selectedModel = provider.models.find(m => m.id === modelId);
-          if (selectedModel) {
-            // 使用模型的name属性判断
-            const modelNameLower = selectedModel.name.toLowerCase();
-            if (modelNameLower.includes('reasoner') || modelNameLower.includes('r1') || 
-                selectedModel.id === 'deepseek-reasoner') {
-              modelName = 'deepseek-reasoner';
-            } else {
-              modelName = 'deepseek-chat';
-            }
-            
-            logService.info(`使用DeepSeek流式模型: ${modelName}, 模型名称: ${selectedModel.name}`);
-          } else {
-            logService.warn(`未找到匹配的DeepSeek模型: ${modelId}`);
-          }
-        }
-        
-        // 规范化消息历史，确保符合模型要求格式
-        const normalizedHistory = this.normalizeMessageHistory(history || [], modelName);
-        
-        // 对于deepseek-reasoner模型，进行特殊处理并添加日志
-        let messages = [];
-        if (modelName === 'deepseek-reasoner') {
-          // 如果历史为空，只添加当前用户消息
-          if (normalizedHistory.length === 0) {
-            messages = [{
-              role: 'user',
-              content: message
-            }];
-          } else {
-            // 使用规范化后的历史，不再重复添加用户消息
-            messages = normalizedHistory;
-            
-            // 如果最后一条消息是用户消息，和当前消息合并，避免连续的用户消息
-            const lastMsg = normalizedHistory[normalizedHistory.length - 1];
-            if (lastMsg && lastMsg.role === 'user') {
-              // 替换掉最后一条用户消息，内容为当前消息
-              messages[messages.length - 1] = {
-                role: 'user',
-                content: message
-              };
-            } else {
-              // 最后一条是助手消息，正常添加当前用户消息
-              messages.push({
-                role: 'user',
-                content: message
-              });
-            }
-          }
-        } else {
-          // 非deepseek-reasoner模型，正常处理
-          messages = [
-            ...normalizedHistory,
-            {
-              role: 'user',
-              content: message
-            }
-          ];
-        }
-        
-        // 记录实际发送的消息内容
-        logService.info(`DeepSeek ${modelName} 发送消息: ${JSON.stringify(messages)}`);
-        
-        // DeepSeek API格式 - 与OpenAI兼容
-        options.body = JSON.stringify({
-          model: modelName,
-          messages: messages,
-          stream: true,
-          temperature: 0.7
-        });
-        
-        // 确保使用正确的API端点
-        let apiEndpoint = provider.apiEndpoint;
-        if (!apiEndpoint || !apiEndpoint.startsWith('https://api.deepseek.com')) {
-          apiEndpoint = 'https://api.deepseek.com/chat/completions';
-        } else if (!apiEndpoint.includes('/chat/completions')) {
-          apiEndpoint = 'https://api.deepseek.com/chat/completions';
-        }
-        
-        const response = await fetch(apiEndpoint, options);
-        
-        if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(`DeepSeek API错误: ${response.status} - ${errorText}`);
-        }
-        
-        if (!response.body) {
-          throw new Error('响应不包含数据流');
-        }
-        
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder('utf-8');
-        
-        // 处理数据流
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          
-          // 解码数据块
-          const chunk = decoder.decode(value, { stream: true });
-          
-          // 处理SSE格式数据
-          const lines = chunk
-            .split('\n')
-            .filter(line => line.trim() !== '' && line.trim() !== 'data: [DONE]');
-          
-          for (const line of lines) {
-            if (line.startsWith('data: ')) {
-              try {
-                const jsonData = JSON.parse(line.slice(6));
-                
-                logService.info(`收到DeepSeek SSE数据: ${JSON.stringify(jsonData)}`);
-                // 提取增量内容
-                if (jsonData.choices && jsonData.choices[0].delta && jsonData.choices[0].delta.content) {
-                  const content = jsonData.choices[0].delta.content;
-                  fullResponse += content;
-                  onUpdate(fullResponse, false);
-                }
-                
-                // 提取推理内容
-                if (jsonData.choices && jsonData.choices[0].delta && jsonData.choices[0].delta.reasoning_content) {
-                  const reasoningContent = jsonData.choices[0].delta.reasoning_content;
-                  reasoningFullResponse += reasoningContent;
-                  logService.debug(`收到推理内容: ${reasoningContent}`);
-                  onUpdate(fullResponse, false, false, reasoningFullResponse);
-                }
-              } catch (e) {
-                console.error('解析DeepSeek SSE数据错误:', e);
-              }
-            }
-          }
-        }
-        
-        // 流式传输完成
-        onUpdate(fullResponse, true, false, reasoningFullResponse);
-      } else {
-        // 对于不支持流式返回的API，退回到非流式调用
-        logService.warn(`${provider.name} 不支持流式返回，使用非流式模式`);
-        const response = await this.callAI(message, provider, proxySettings, history, modelId, false);
-        onUpdate(response, true);
-      }
-    } catch (error) {
-      console.error('流式API调用错误:', error);
-      logService.error('流式API调用错误', error);
-      throw error;
-    }
+
+    logService.info(`找到自定义配置，bodyFields数量: ${provider.customConfig.bodyFields.length}`);
+    logService.info(`使用自定义配置进行流式调用: ${provider.name}`);
+    await this.streamCustomAPI(
+      message, 
+      provider, 
+      proxySettings, 
+      onUpdate, 
+      abortSignal, 
+      history, 
+      modelId, 
+      temperature
+    );
   }
   
   /**
    * 测试API连接
-   * 用于验证API设置是否正确
+   * 用于验证API设置是否正确，要求必须配置自定义API
    */
   async testConnection(providerId: string): Promise<{ success: boolean; message: string }> {
     try {
@@ -831,6 +747,13 @@ class AIService {
         };
       }
       
+      if (!provider.customConfig) {
+        return { 
+          success: false, 
+          message: '请先配置自定义API参数才能测试连接' 
+        };
+      }
+      
       if (!provider.apiKey) {
         return { 
           success: false, 
@@ -838,31 +761,17 @@ class AIService {
         };
       }
       
-      // 处理不同类型提供商的默认模型
-      let testModelId = null;
-      
-      if (provider.name.toLowerCase().includes('deepseek')) {
-        // DeepSeek使用标准模型名称
-        testModelId = 'deepseek-chat'; // 默认使用DeepSeek-V3
-        
-        // 如果有默认模型且是有效的DeepSeek模型，使用它
-        if (provider.defaultModelId) {
-          const defaultModel = provider.models.find(m => m.id === provider.defaultModelId);
-          if (defaultModel) {
-            // 使用模型的name属性判断
-            const modelNameLower = defaultModel.name.toLowerCase();
-            testModelId = modelNameLower.includes('reasoner') || modelNameLower.includes('r1') ? 
-              'deepseek-reasoner' : 'deepseek-chat';
-          }
-        }
-        
-        logService.info(`DeepSeek API测试使用模型: ${testModelId}`);
-      } else {
-        // 其他提供商正常使用模型ID
-        testModelId = provider.defaultModelId;
+      // 获取默认模型
+      let testModelId = provider.defaultModelId;
         if (!testModelId && provider.models && provider.models.length > 0) {
           testModelId = provider.models[0].id;
         }
+      
+      if (!testModelId) {
+        return { 
+          success: false, 
+          message: '请先添加至少一个模型' 
+        };
       }
       
       const proxySettings = storageService.getProxySettings();
@@ -870,7 +779,7 @@ class AIService {
       // 测试消息
       const testMessage = "这是一条测试消息，请简短回复以验证连接正常。";
       
-      logService.info(`测试连接 ${provider.name}，使用模型: ${testModelId || '默认模型'}`);
+      logService.info(`测试连接 ${provider.name}，使用模型: ${testModelId}`);
       
       // 发送测试请求
       const response = await this.callAI(testMessage, provider, proxySettings, undefined, testModelId, false);
@@ -944,8 +853,10 @@ class AIService {
         }
       }
 
-      // 如果有消息更新回调，则使用流式响应
-      if (onUpdate) {
+      // 检查Agent是否启用流式模式，如果有消息更新回调，则使用Agent的流式设置
+      const useStream = onUpdate && (agent.isStreamMode ?? true);
+
+      if (useStream) {
         await this.streamCallAI(
           message,
           provider,
@@ -953,24 +864,28 @@ class AIService {
           onUpdate,
           new AbortController().signal,
           enhancedHistory,
-          agent.modelId
+          agent.modelId,
+          agent.temperature
         );
         return;
       }
 
       // 否则使用普通响应
-      const response = await this.callAI(
+      const response = await this.callAIWithReasoning(
         message,
         provider,
         proxySettings,
         enhancedHistory,
         agent.modelId,
-        false
+        false,
+        undefined,
+        agent.temperature
       );
 
       return {
         id: Date.now().toString(),
-        content: response,
+        content: response.content,
+        reasoningContent: response.reasoningContent,
         role: 'assistant',
         timestamp: new Date()
       };
@@ -1314,7 +1229,7 @@ class AIService {
         this.currentStreamController.signal,
         history,
         modelId,
-        systemPrompt
+        undefined
       );
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
@@ -1324,6 +1239,136 @@ class AIService {
       }
     } finally {
       this.currentStreamController = null;
+    }
+  }
+
+  /**
+   * 通用流式API调用（使用自定义配置）
+   */
+  private async streamCustomAPI(
+    message: string,
+    provider: AIProvider,
+    proxySettings: ProxySettings,
+    onUpdate: (content: string, done: boolean, error?: boolean, reasoningContent?: string) => void,
+    abortSignal: AbortSignal,
+    history?: { role: 'user' | 'assistant'; content: string }[],
+    modelId?: string,
+    temperature?: number
+  ): Promise<void> {
+    if (!provider.customConfig) {
+      throw new Error('提供商缺少自定义API配置');
+    }
+
+    const { url, options } = this.buildCustomAPIRequest(
+      provider.customConfig,
+      provider,
+      message,
+      history,
+      modelId,
+      undefined,
+      true, // 启用流式
+      temperature
+    );
+
+    // 添加中断信号
+    options.signal = abortSignal;
+
+    logService.info(`使用自定义配置进行流式调用: ${provider.name}`);
+    logService.debug(`请求URL: ${url}`);
+    logService.debug(`请求选项: ${JSON.stringify(options, null, 2)}`);
+
+    const response = await fetch(url, options);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      let errorMessage = `API错误: ${response.status} - ${errorText}`;
+      
+      // 尝试使用自定义错误解析
+      if (provider.customConfig.response.errorConfig?.messagePath) {
+        try {
+          const errorData = JSON.parse(errorText);
+          const customError = this.getNestedValue(errorData, provider.customConfig.response.errorConfig.messagePath);
+          if (customError) {
+            errorMessage = `API错误: ${customError}`;
+          }
+        } catch {
+          // 忽略解析错误，使用默认错误信息
+        }
+      }
+      
+      throw new Error(errorMessage);
+    }
+
+    // 检查是否支持流式响应
+    if (!provider.customConfig.response.streamConfig?.enabled) {
+      // 如果不支持流式，直接返回完整响应
+      const data = await response.json();
+      const content = this.extractResponseContent(data, provider.customConfig.response);
+      onUpdate(content, true, false);
+      return;
+    }
+
+    // 处理流式响应
+    if (!response.body) {
+      throw new Error('响应不包含数据流');
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    
+    let fullResponse = '';
+    let reasoningFullResponse = '';
+    const streamConfig = provider.customConfig.response.streamConfig;
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        
+        // 解码数据块
+        const chunk = decoder.decode(value, { stream: true });
+        
+        // 处理SSE格式数据
+        const lines = chunk
+          .split('\n')
+          .filter(line => line.trim() !== '' && 
+                  line.trim() !== `data: ${streamConfig.finishCondition || '[DONE]'}`);
+        
+        for (const line of lines) {
+          const dataPrefix = streamConfig.dataPrefix || 'data: ';
+          if (line.startsWith(dataPrefix)) {
+            try {
+              const jsonData = JSON.parse(line.slice(dataPrefix.length));
+              
+              // 提取增量内容
+              const content = this.getNestedValue(jsonData, streamConfig.contentPath);
+              if (content) {
+                fullResponse += String(content);
+                onUpdate(fullResponse, false);
+              }
+              
+              // 提取推理内容（如果配置了）
+              // 对于流式响应，优先使用流式配置的推理路径，因为结构不同（delta vs message）
+              const reasoningPath = streamConfig.reasoningPath || provider.customConfig.response.reasoningPath;
+              if (reasoningPath) {
+                const reasoningContent = this.getNestedValue(jsonData, reasoningPath);
+                if (reasoningContent) {
+                  reasoningFullResponse += String(reasoningContent);
+                  logService.debug(`收到推理内容: ${reasoningContent}`);
+                  onUpdate(fullResponse, false, false, reasoningFullResponse);
+                }
+              }
+            } catch (e) {
+              console.error('解析自定义SSE数据错误:', e);
+            }
+          }
+        }
+      }
+      
+      // 流式传输完成
+      onUpdate(fullResponse, true, false, reasoningFullResponse);
+    } finally {
+      reader.releaseLock();
     }
   }
 }

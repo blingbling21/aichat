@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card, CardContent } from "@/components/ui/card";
 import { Markdown } from "@/components/ui/markdown";
+import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 
 /**
@@ -34,12 +35,34 @@ const ChatInterface: FC = () => {
   const [availableModels, setAvailableModels] = useState<AIModel[]>([]);
   // 当前选中的模型
   const [selectedModelData, setSelectedModelData] = useState<AIModel | null>(null);
+  // 流式模式开关
+  const [isStreamMode, setIsStreamMode] = useState(true);
+  // 温度设置状态
+  const [temperature, setTemperature] = useState<number>(0.7);
+  // 温度输入状态
+  const [isEditingTemperature, setIsEditingTemperature] = useState(false);
+  const [tempInputValue, setTempInputValue] = useState('');
+  
+  // 智能滚动状态
+  const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
   
   // 聊天容器引用，用于自动滚动
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  // 消息容器引用，用于监听滚动事件
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
 
   // 加载本地存储的数据，确保在客户端执行
   useEffect(() => {
+    // 加载流式模式设置
+    try {
+      const savedStreamMode = storageService.getStreamMode();
+      setIsStreamMode(savedStreamMode);
+      logService.info(`已加载流式模式设置: ${savedStreamMode}`);
+    } catch (error) {
+      console.error('加载流式模式设置失败:', error);
+      logService.error('加载流式模式设置失败', error);
+    }
+    
     // 加载聊天历史
     try {
       const savedMessages = localStorage.getItem('chatHistory');
@@ -166,7 +189,7 @@ const ChatInterface: FC = () => {
       
       // 保存选中的模型ID到本地存储
       storageService.saveSelectedModelId(selectedModel);
-      logService.debug(`当前选中模型: ${model?.name || '未知'}, 已保存模型ID: ${selectedModel}`);
+      logService.debug(`当前选中模型: ${model?.id || '未知'}, 已保存模型ID: ${selectedModel}`);
     } else {
       setSelectedModelData(null);
     }
@@ -174,17 +197,121 @@ const ChatInterface: FC = () => {
   
   // 保存聊天历史到本地存储
   useEffect(() => {
-    if (messages.length > 0) {
-      try {
+    try {
+      if (messages.length > 0) {
         localStorage.setItem('chatHistory', JSON.stringify(messages));
         logService.debug(`已保存 ${messages.length} 条聊天历史记录`);
-      } catch (error) {
-        console.error('保存聊天历史失败:', error);
-        logService.error('保存聊天历史失败', error);
+      } else {
+        // 当消息为空时，也要清空localStorage
+        localStorage.removeItem('chatHistory');
+        logService.debug('已清空聊天历史记录');
       }
+    } catch (error) {
+      console.error('保存聊天历史失败:', error);
+      logService.error('保存聊天历史失败', error);
     }
   }, [messages]);
   
+  // 加载温度设置
+  useEffect(() => {
+    try {
+      const savedTemperature = localStorage.getItem('chatTemperature');
+      if (savedTemperature) {
+        const temp = parseFloat(savedTemperature);
+        if (!isNaN(temp) && temp >= 0 && temp <= 2) {
+          setTemperature(temp);
+          logService.info(`已加载温度设置: ${temp}`);
+        }
+      }
+    } catch (error) {
+      console.error('加载温度设置失败:', error);
+      logService.error('加载温度设置失败', error);
+    }
+  }, []);
+  
+  // 保存温度设置
+  const handleTemperatureChange = (newTemperature: number) => {
+    setTemperature(newTemperature);
+    localStorage.setItem('chatTemperature', newTemperature.toString());
+    logService.info(`温度设置已更新: ${newTemperature}`);
+  };
+
+  // 开始编辑温度
+  const startEditingTemperature = () => {
+    setTempInputValue(temperature.toString());
+    setIsEditingTemperature(true);
+  };
+
+  // 完成温度编辑
+  const finishEditingTemperature = () => {
+    const newTemp = parseFloat(tempInputValue);
+    if (!isNaN(newTemp) && newTemp >= 0 && newTemp <= 2) {
+      // 保留最多3位小数
+      const roundedTemp = Math.round(newTemp * 1000) / 1000;
+      handleTemperatureChange(roundedTemp);
+    }
+    setIsEditingTemperature(false);
+  };
+
+  // 取消温度编辑
+  const cancelEditingTemperature = () => {
+    setIsEditingTemperature(false);
+    setTempInputValue('');
+  };
+
+  // 处理温度输入变化
+  const handleTempInputChange = (value: string) => {
+    // 允许数字、小数点，支持多位小数
+    if (/^\d*\.?\d{0,3}$/.test(value)) {
+      setTempInputValue(value);
+    }
+  };
+
+  // 检测是否滚动到底部
+  const isScrolledToBottom = () => {
+    if (!messagesContainerRef.current) return true;
+    
+    const container = messagesContainerRef.current;
+    const threshold = 50; // 50px的容差，考虑到滚动的精确性
+    
+    return Math.abs(
+      container.scrollHeight - container.clientHeight - container.scrollTop
+    ) <= threshold;
+  };
+
+  // 处理滚动事件
+  const handleScroll = () => {
+    if (!messagesContainerRef.current) return;
+    
+    const isAtBottom = isScrolledToBottom();
+    
+    // 如果用户滚动到底部，恢复自动滚动
+    if (isAtBottom && !shouldAutoScroll) {
+      setShouldAutoScroll(true);
+      logService.debug('用户滚动到底部，恢复自动滚动');
+    }
+    // 如果用户向上滚动且不在底部，停止自动滚动
+    else if (!isAtBottom && shouldAutoScroll) {
+      setShouldAutoScroll(false);
+      logService.debug('用户向上滚动，停止自动滚动');
+    }
+  };
+
+  // 智能滚动到底部
+  const scrollToBottom = () => {
+    if (shouldAutoScroll && messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  };
+
+  // 强制滚动到底部（用于发送新消息时）
+  const forceScrollToBottom = () => {
+    setShouldAutoScroll(true);
+    setTimeout(() => {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, 100);
+  };
+
   // 处理停止生成
   const handleStopGeneration = () => {
     logService.info('用户请求停止生成');
@@ -256,54 +383,124 @@ const ChatInterface: FC = () => {
       streaming: true // 标记为流式消息
     };
     
-    // 更新消息列表，添加用户消息和初始空的助手消息
-    setMessages(prev => [...prev, userMessage, assistantMessage]);
-    setInput('');
-    setIsLoading(true);
-    
-    try {
-      // 传递完整的聊天历史以保持上下文（不包括刚创建的空助手消息）
-      const history = [...messages, userMessage]
+    // 使用函数式更新来获取最新的messages状态
+    setMessages(currentMessages => {
+      logService.info(`发送前当前messages状态: 共${currentMessages.length}条消息`);
+      currentMessages.forEach((msg, index) => {
+        logService.info(`  现有消息[${index}] ${msg.role}: ${msg.content.substring(0, 50)}${msg.content.length > 50 ? '...' : ''}`);
+      });
+      
+      // 构建历史记录（使用当前最新的状态）
+      const history = [...currentMessages, userMessage]
         .filter(msg => !msg.streaming && msg.content.trim() !== '') // 过滤掉正在流式生成的消息和空消息
         .map(msg => ({
           role: msg.role,
           content: msg.content
         }));
       
-      logService.debug(`使用提供商 ${selectedProvider} 的模型 ${selectedModel} 流式发送消息`);
+      logService.debug(`构建历史记录，当前messages数量: ${currentMessages.length}, 构建后history数量: ${history.length}`);
+      if (history.length > 0) {
+        logService.debug(`历史记录内容: ${JSON.stringify(history.map(h => ({ role: h.role, content: h.content.substring(0, 30) + '...' })))}`);
+      } else {
+        logService.debug('无历史记录，这是新的对话开始');
+      }
       
-      // 调用AI服务发送流式消息
-      await aiService.sendMessageStream(
-        input, 
-        (content, done, error, reasoningContent) => handleStreamUpdate(assistantMessageId, content, done, error, reasoningContent),
-        selectedProvider, 
-        history, 
-        selectedModel
-      );
-    } catch (error) {
-      console.error('发送消息失败:', error);
-      logService.error('发送消息失败', error);
+      // 异步发送消息（不在setState回调中执行）
+      setTimeout(async () => {
+        try {
+          logService.debug(`使用提供商 ${selectedProvider} 的模型 ${selectedModel} ${isStreamMode ? '流式' : '非流式'}发送消息`);
+          logService.info(`🌡️ 当前温度设置: ${temperature}`);
+          
+          if (isStreamMode) {
+            // 调用AI服务发送流式消息
+            await aiService.sendMessageStream(
+              input, 
+              (content, done, error, reasoningContent) => handleStreamUpdate(assistantMessageId, content, done, error, reasoningContent),
+              selectedProvider, 
+              history, 
+              selectedModel,
+              temperature
+            );
+          } else {
+            // 调用AI服务发送非流式消息
+            const response = await aiService.sendMessage(
+              input,
+              selectedProvider,
+              history,
+              selectedModel,
+              temperature
+            );
+            
+            // 更新助手消息
+            setMessages(prev => 
+              prev.map(msg => 
+                msg.id === assistantMessageId 
+                  ? {
+                      ...msg,
+                      content: response.content,
+                      reasoningContent: response.reasoningContent,
+                      streaming: false
+                    }
+                  : msg
+              )
+            );
+            setIsLoading(false);
+          }
+        } catch (error) {
+          console.error('发送消息失败:', error);
+          logService.error('发送消息失败', error);
+          
+          // 更新助手消息为错误消息
+          setMessages(prev => 
+            prev.map(msg => 
+              msg.id === assistantMessageId 
+                ? {
+                    ...msg,
+                    content: '发送消息失败，请检查网络或API设置。',
+                    streaming: false
+                  }
+                : msg
+            )
+          );
+          setIsLoading(false);
+        }
+      }, 0);
       
-      // 更新助手消息为错误消息
-      setMessages(prev => 
-        prev.map(msg => 
-          msg.id === assistantMessageId 
-            ? {
-                ...msg,
-                content: '发送消息失败，请检查网络或API设置。',
-                streaming: false
-              }
-            : msg
-        )
-      );
-      setIsLoading(false);
-    }
+      // 返回新的状态：添加用户消息和初始空的助手消息
+      return [...currentMessages, userMessage, assistantMessage];
+    });
+    
+    setInput('');
+    setIsLoading(true);
+    
+    // 发送新消息后强制滚动到底部
+    forceScrollToBottom();
   };
   
   // 自动滚动到最新消息
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    scrollToBottom();
+  }, [messages, shouldAutoScroll]);
+  
+  // 添加滚动事件监听器
+  useEffect(() => {
+    const container = messagesContainerRef.current;
+    if (!container) return;
+    
+    // 使用防抖来避免频繁触发
+    let timeoutId: NodeJS.Timeout;
+    const debouncedHandleScroll = () => {
+      clearTimeout(timeoutId);
+      timeoutId = setTimeout(handleScroll, 100);
+    };
+    
+    container.addEventListener('scroll', debouncedHandleScroll, { passive: true });
+    
+    return () => {
+      container.removeEventListener('scroll', debouncedHandleScroll);
+      clearTimeout(timeoutId);
+    };
+  }, [shouldAutoScroll]); // 依赖shouldAutoScroll以便在状态变化时重新设置监听器
   
   // 格式化时间
   const formatTime = (date: Date) => {
@@ -315,9 +512,14 @@ const ChatInterface: FC = () => {
 
   // 清除聊天记录
   const handleClearChat = () => {
+    logService.info('开始清空聊天记录');
+    logService.info(`清空前messages数量: ${messages.length}`);
+    if (messages.length > 0) {
+      logService.info(`清空前最后一条消息: ${messages[messages.length - 1].role}: ${messages[messages.length - 1].content.substring(0, 50)}...`);
+    }
     setMessages([]);
     localStorage.removeItem('chatHistory');
-    logService.info('已清空聊天记录');
+    logService.info('已清空聊天记录和本地存储');
   };
 
   // 在组件内部增加切换折叠状态的函数
@@ -328,6 +530,42 @@ const ChatInterface: FC = () => {
       }
       return msg;
     }));
+  };
+
+  // 检查当前提供商是否配置了流式响应
+  const checkStreamConfig = () => {
+    const provider = aiProviders.find(p => p.id === selectedProvider);
+    if (!provider || !provider.customConfig) {
+      return false;
+    }
+    return provider.customConfig.response.streamConfig?.enabled || false;
+  };
+
+  // 检查当前提供商是否配置了温度模板字段
+  const checkTemperatureConfig = () => {
+    const provider = aiProviders.find(p => p.id === selectedProvider);
+    if (!provider || !provider.customConfig) {
+      return false;
+    }
+    
+    // 查找temperature字段配置
+    const tempField = provider.customConfig.bodyFields.find(field => 
+      field.path.toLowerCase().includes('temperature') && 
+      field.valueType === 'template'
+    );
+    
+    return !!tempField;
+  };
+
+  // 处理流式模式切换
+  const handleStreamModeChange = (enabled: boolean) => {
+    if (enabled && !checkStreamConfig()) {
+      toast.error('当前提供商未配置流式响应解析，请在设置中完成配置后再启用流式模式');
+      return;
+    }
+    setIsStreamMode(enabled);
+    storageService.saveStreamMode(enabled);
+    logService.info(`流式模式已${enabled ? '启用' : '禁用'}并保存到本地`);
   };
 
   // 处理图片上传
@@ -381,7 +619,7 @@ const ChatInterface: FC = () => {
                 <SelectContent>
                   {availableModels.map(model => (
                     <SelectItem key={model.id} value={model.id}>
-                      {model.name}
+                      {model.id}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -403,7 +641,11 @@ const ChatInterface: FC = () => {
       </div>
       
       {/* 消息列表 - 确保可以滚动 */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      <div 
+        ref={messagesContainerRef}
+        className="flex-1 overflow-y-auto p-4 space-y-4"
+        onScroll={handleScroll}
+      >
         {messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-gray-500 dark:text-gray-400">
             <p>开始一个新的对话</p>
@@ -496,6 +738,22 @@ const ChatInterface: FC = () => {
           ))
         )}
         <div ref={messagesEndRef} />
+        
+        {/* 新消息提示 - 当用户向上滚动时显示 */}
+        {!shouldAutoScroll && messages.length > 0 && (
+          <div className="sticky bottom-4 flex justify-center">
+            <button
+              onClick={() => {
+                setShouldAutoScroll(true);
+                messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+              }}
+              className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-full shadow-lg transition-all duration-200 flex items-center space-x-2"
+            >
+              <span>📩</span>
+              <span>滚动到最新消息</span>
+            </button>
+          </div>
+        )}
       </div>
       
       {/* 输入框 */}
@@ -556,6 +814,63 @@ const ChatInterface: FC = () => {
             )}
           </div>
         )}
+        
+        {/* 流式模式开关和温度控制 */}
+        <div className="mb-2 flex items-center space-x-4">
+          <div className="flex items-center space-x-2">
+            <Checkbox
+              id="stream-mode"
+              checked={isStreamMode}
+              onCheckedChange={handleStreamModeChange}
+              disabled={isLoading}
+            />
+            <label 
+              htmlFor="stream-mode" 
+              className="text-sm text-gray-600 dark:text-gray-400 cursor-pointer"
+            >
+              流式输出 {!checkStreamConfig() && isStreamMode && 
+                <span className="text-red-500">（未配置流式响应解析）</span>
+              }
+            </label>
+          </div>
+          
+          {/* 温度控制 */}
+          {checkTemperatureConfig() && (
+            <div className="flex items-center space-x-2">
+              <span className="text-sm text-gray-600 dark:text-gray-400">温度:</span>
+              {isEditingTemperature ? (
+                <div className="flex items-center space-x-1">
+                  <input
+                    type="text"
+                    value={tempInputValue}
+                    onChange={(e) => handleTempInputChange(e.target.value)}
+                    onBlur={finishEditingTemperature}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        finishEditingTemperature();
+                      } else if (e.key === 'Escape') {
+                        cancelEditingTemperature();
+                      }
+                    }}
+                    className="w-16 px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                    placeholder="0.0-2.0"
+                    autoFocus
+                    disabled={isLoading}
+                  />
+                  <span className="text-xs text-gray-500">(0.0-2.0)</span>
+                </div>
+              ) : (
+                <button
+                  onClick={startEditingTemperature}
+                  disabled={isLoading}
+                  className="px-2 py-1 text-xs bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 rounded border border-gray-300 dark:border-gray-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {temperature}
+                </button>
+              )}
+            </div>
+          )}
+        </div>
         
         <div className="flex items-center space-x-2">
           <Input

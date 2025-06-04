@@ -19,7 +19,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Agent, AIProvider } from '../../../types';
+import { Agent, AIProvider, AIModel } from '../../../types';
 import { storageService } from '../../../services/storage';
 import { logService } from '../../../services/log';
 import { toast } from "sonner";
@@ -44,6 +44,8 @@ const formSchema = z.object({
   }),
   keepHistory: z.boolean(),
   maxHistoryMessages: z.number().optional(),
+  isStreamMode: z.boolean().optional(),
+  temperature: z.number().min(0).max(2).optional(),
 });
 
 const AgentEditPage: FC = () => {
@@ -54,7 +56,7 @@ const AgentEditPage: FC = () => {
 
   // 获取AI提供商列表
   const [providers, setProviders] = useState<AIProvider[]>([]);
-  const [availableModels, setAvailableModels] = useState<{ id: string; name: string }[]>([]);
+  const [availableModels, setAvailableModels] = useState<AIModel[]>([]);
 
   // 初始化表单
   const form = useForm<z.infer<typeof formSchema>>({
@@ -67,12 +69,41 @@ const AgentEditPage: FC = () => {
       modelId: "",
       keepHistory: true,
       maxHistoryMessages: 10,
+      isStreamMode: true,
+      temperature: 0.7,
     },
   });
 
   // 监听提供商ID变化，更新可用模型列表
   const watchProviderId = form.watch('providerId');
   
+  // 检查当前提供商是否配置了流式响应
+  const checkStreamConfig = () => {
+    if (!watchProviderId) return false;
+    const provider = providers.find(p => p.id === watchProviderId);
+    if (!provider || !provider.customConfig) {
+      return false;
+    }
+    return provider.customConfig.response.streamConfig?.enabled || false;
+  };
+
+  // 检查当前提供商是否配置了温度模板字段
+  const checkTemperatureConfig = () => {
+    if (!watchProviderId) return false;
+    const provider = providers.find(p => p.id === watchProviderId);
+    if (!provider || !provider.customConfig) {
+      return false;
+    }
+    
+    // 查找temperature字段配置
+    const tempField = provider.customConfig.bodyFields.find(field => 
+      field.path.toLowerCase().includes('temperature') && 
+      field.valueType === 'template'
+    );
+    
+    return !!tempField;
+  };
+
   useEffect(() => {
     if (watchProviderId) {
       const provider = providers.find(p => p.id === watchProviderId);
@@ -110,6 +141,8 @@ const AgentEditPage: FC = () => {
           modelId: agent.modelId,
           keepHistory: agent.keepHistory,
           maxHistoryMessages: agent.maxHistoryMessages || 10,
+          isStreamMode: agent.isStreamMode ?? true,
+          temperature: agent.temperature ?? 0.7,
         });
       } else {
         toast.error("找不到要编辑的Agent");
@@ -138,6 +171,8 @@ const AgentEditPage: FC = () => {
         modelId: values.modelId,
         keepHistory: values.keepHistory,
         maxHistoryMessages: values.maxHistoryMessages,
+        isStreamMode: values.isStreamMode,
+        temperature: values.temperature,
         createdAt: new Date(),
         updatedAt: new Date(),
       };
@@ -274,7 +309,7 @@ const AgentEditPage: FC = () => {
                       <SelectContent>
                         {availableModels.map(model => (
                           <SelectItem key={model.id} value={model.id}>
-                            {model.name}
+                            {model.id}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -322,6 +357,69 @@ const AgentEditPage: FC = () => {
                     </FormControl>
                     <div className="text-xs text-gray-500 mt-1">
                       限制传递给模型的历史消息数量，较小的值可以降低Token使用量
+                    </div>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            )}
+            
+            {/* 流式模式设置 */}
+            <FormField
+              control={form.control}
+              name="isStreamMode"
+              render={({ field }) => (
+                <FormItem className="flex flex-row items-start space-x-3 space-y-0 rounded-md border p-4">
+                  <FormControl>
+                    <Checkbox
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                    />
+                  </FormControl>
+                  <div className="space-y-1 leading-none">
+                    <FormLabel>启用流式输出</FormLabel>
+                    <p className="text-sm text-gray-500">
+                      流式输出能实时显示AI回复内容，提供更好的交互体验
+                      {!checkStreamConfig() && field.value && 
+                        <span className="text-red-500 block">（注意：当前提供商未配置流式响应解析）</span>
+                      }
+                    </p>
+                  </div>
+                </FormItem>
+              )}
+            />
+            
+            {/* 温度设置 */}
+            {checkTemperatureConfig() && (
+              <FormField
+                control={form.control}
+                name="temperature"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>温度设置</FormLabel>
+                    <FormControl>
+                      <Input 
+                        type="number" 
+                        step="0.01"
+                        min="0"
+                        max="2"
+                        value={field.value || 0}
+                        onChange={(e) => {
+                          const value = e.target.value;
+                          if (value === '') {
+                            field.onChange(0);
+                          } else {
+                            const numValue = parseFloat(value);
+                            if (!isNaN(numValue)) {
+                              // 保留最多3位小数
+                              field.onChange(Math.round(numValue * 1000) / 1000);
+                            }
+                          }
+                        }}
+                      />
+                    </FormControl>
+                    <div className="text-xs text-gray-500 mt-1">
+                      控制AI回复的随机性和创造性 (0.0-2.0)。较低值更保守，较高值更有创意。支持精确到小数点后三位，如0.733
                     </div>
                     <FormMessage />
                   </FormItem>

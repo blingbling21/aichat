@@ -26,8 +26,7 @@ export type ModelFeatures = {
  * AI模型类型定义
  */
 export type AIModel = {
-  id: string;
-  name: string;
+  id: string; // 模型标识符，既是API中使用的ID，也是显示名称
   // 模型特有的参数设置，如temperature, top_p等
   parameters?: Record<string, number | string | boolean>;
   // 模型支持的功能
@@ -35,7 +34,72 @@ export type AIModel = {
 };
 
 /**
- * AI提供商类型定义
+ * API请求头配置
+ */
+export type APIHeaderConfig = {
+  key: string;
+  value: string;
+  valueTemplate?: string; // 支持模板，如 "Bearer {apiKey}"
+};
+
+/**
+ * API请求体字段配置
+ */
+export type APIBodyFieldConfig = {
+  path: string; // JSON路径，如 "model", "messages", "messages[].role"
+  valueType: 'static' | 'dynamic' | 'template';
+  value?: string | number | boolean; // 静态值
+  valueTemplate?: string; // 模板，如 "{model}", "{message}", "{history}"
+  description?: string; // 字段说明
+};
+
+/**
+ * API响应解析配置
+ */
+export type APIResponseConfig = {
+  // 响应内容提取路径
+  contentPath: string; // 如 "choices[0].message.content", "completion"
+  // 推理内容提取路径（可选，支持非流式和流式）
+  reasoningPath?: string; // 如 "choices[0].message.reasoning_content"
+  // 流式响应配置
+  streamConfig?: {
+    enabled: boolean;
+    dataPrefix?: string; // SSE数据前缀，如 "data: "
+    contentPath: string; // 流式响应中内容的路径
+    reasoningPath?: string; // 推理内容路径
+    finishCondition?: string; // 结束条件，如 "[DONE]"
+  };
+  // 错误响应处理
+  errorConfig?: {
+    messagePath?: string; // 错误信息路径，如 "error.message"
+  };
+};
+
+/**
+ * 自定义API配置
+ */
+export type CustomAPIConfig = {
+  // 基础配置
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE';
+  contentType: string;
+  
+  // 请求头配置
+  headers: APIHeaderConfig[];
+  
+  // 请求体配置
+  bodyFields: APIBodyFieldConfig[];
+  
+  // 响应解析配置
+  response: APIResponseConfig;
+  
+  // 模板变量说明
+  templateVariables?: {
+    [key: string]: string; // 变量名 -> 说明
+  };
+};
+
+/**
+ * AI提供商类型定义（扩展版）
  */
 export type AIProvider = {
   id: string;
@@ -46,6 +110,14 @@ export type AIProvider = {
   models: AIModel[];
   // 当前选中的默认模型ID
   defaultModelId?: string;
+  
+  // 新增：自定义API配置
+  customConfig?: CustomAPIConfig;
+  // 是否使用自定义配置（如果为false，使用内置的硬编码逻辑）
+  useCustomConfig?: boolean;
+  
+  // 预设配置类型（用于快速设置）
+  presetType?: 'openai' | 'claude' | 'deepseek' | 'custom';
 };
 
 /**
@@ -78,6 +150,10 @@ export type Agent = {
   maxHistoryMessages?: number;
   // Agent图标
   icon?: string;
+  // 是否使用流式模式
+  isStreamMode?: boolean;
+  // 温度设置
+  temperature?: number;
   // Agent设置
   settings?: {
     temperature?: number;

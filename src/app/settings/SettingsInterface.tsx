@@ -1,7 +1,7 @@
 "use client";
 
-import { FC, useState, useEffect } from 'react';
-import { Plus, Trash2, Save, Edit, Check, Zap, Loader2, Settings } from 'lucide-react';
+import React, { useState, useEffect, FC } from 'react';
+import { Plus, Trash2, Save, Edit, Check, Zap, Loader2, Settings, Wrench } from 'lucide-react';
 import { AIProvider, ProxySettings, AIModel, ModelFeatures } from '../types';
 import { storageService } from '../services/storage';
 import { aiService } from '../services/ai';
@@ -20,17 +20,38 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
+import AdvancedProviderConfig from '../components/AdvancedProviderConfig';
 
 /**
  * 设置界面组件
  * 包含AI提供商管理和代理设置
  */
 const SettingsInterface: FC = () => {
-  // AI提供商列表状态
+  // 状态管理
   const [providers, setProviders] = useState<AIProvider[]>([]);
+  const [proxySettings, setProxySettings] = useState<ProxySettings>({
+    enabled: false,
+    host: '',
+    port: '',
+    requiresAuth: false,
+    username: '',
+    password: ''
+  });
+  
+  // 新增：提供商编辑对话框状态
+  // const [isProviderDialogOpen, setIsProviderDialogOpen] = useState(false);
+  // const [editingProvider, setEditingProvider] = useState<AIProvider | null>(null);
+  
+  // 新增：模型编辑对话框状态
+  // const [isModelDialogOpen, setIsModelDialogOpen] = useState(false);
+  // const [editingModelProvider, setEditingModelProvider] = useState<AIProvider | null>(null);
+  
+  // 高级配置对话框状态
+  const [advancedConfigOpen, setAdvancedConfigOpen] = useState(false);
+  const [selectedProvider, setSelectedProvider] = useState<AIProvider | null>(null);
   
   // 新提供商表单状态
-  const [newProvider, setNewProvider] = useState<AIProvider>({
+  const [newProvider, setNewProvider] = useState<Partial<AIProvider>>({
     id: '',
     name: '',
     apiEndpoint: '',
@@ -41,16 +62,6 @@ const SettingsInterface: FC = () => {
   // 编辑状态跟踪
   const [editingProviderId, setEditingProviderId] = useState<string | null>(null);
   
-  // 代理设置状态
-  const [proxySettings, setProxySettings] = useState<ProxySettings>({
-    enabled: false,
-    host: '',
-    port: '',
-    requiresAuth: false,
-    username: '',
-    password: ''
-  });
-  
   // 删除确认对话框状态
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [providerToDelete, setProviderToDelete] = useState<string | null>(null);
@@ -60,11 +71,9 @@ const SettingsInterface: FC = () => {
   
   // 模型管理对话框状态
   const [modelDialogOpen, setModelDialogOpen] = useState(false);
-  const [currentProvider, setCurrentProvider] = useState<string | null>(null);
-  const [newModel, setNewModel] = useState<AIModel>({
+  const [currentProvider, setCurrentProvider] = useState<string>('');
+  const [newModel, setNewModel] = useState<Partial<AIModel>>({
     id: '',
-    name: '',
-    parameters: {},
     features: {
       reasoning: false,
       image: false,
@@ -95,8 +104,8 @@ const SettingsInterface: FC = () => {
         apiEndpoint: 'https://api.openai.com/v1/chat/completions',
         apiKey: '',
         models: [
-          { id: 'gpt-3.5-turbo', name: 'GPT-3.5 Turbo' },
-          { id: 'gpt-4', name: 'GPT-4' }
+          { id: 'gpt-3.5-turbo' },
+          { id: 'gpt-4' }
         ],
         defaultModelId: 'gpt-3.5-turbo'
       }]);
@@ -126,27 +135,30 @@ const SettingsInterface: FC = () => {
     if (newProvider.name.toLowerCase().includes('openai') || newProvider.name.toLowerCase().includes('chatgpt')) {
       presetModels = [
         { 
-          id: 'gpt-3.5-turbo', 
-          name: 'GPT-3.5 Turbo',
+          id: 'gpt-3.5-turbo',
           features: {
             reasoning: false,
-            image: false
+            image: false,
+            video: false,
+            voice: false
           }
         },
         { 
-          id: 'gpt-4', 
-          name: 'GPT-4',
+          id: 'gpt-4',
           features: {
             reasoning: true,
-            image: false
+            image: false,
+            video: false,
+            voice: false
           }
         },
         { 
-          id: 'gpt-4-turbo', 
-          name: 'GPT-4 Turbo',
+          id: 'gpt-4-turbo',
           features: {
             reasoning: true,
-            image: false
+            image: false,
+            video: false,
+            voice: false
           }
         }
       ];
@@ -154,19 +166,21 @@ const SettingsInterface: FC = () => {
       // 使用DeepSeek API文档中指定的标准模型名称
       presetModels = [
         { 
-          id: 'deepseek-chat', 
-          name: 'DeepSeek-V3',
+          id: 'deepseek-chat',
           features: {
             reasoning: false,
-            image: false
+            image: false,
+            video: false,
+            voice: false
           }
         },
         { 
-          id: 'deepseek-reasoner', 
-          name: 'DeepSeek-R1',
+          id: 'deepseek-reasoner',
           features: {
             reasoning: true,
-            image: false
+            image: false,
+            video: false,
+            voice: false
           }
         }
       ];
@@ -179,39 +193,46 @@ const SettingsInterface: FC = () => {
     } else if (newProvider.name.toLowerCase().includes('claude') || newProvider.name.toLowerCase().includes('anthropic')) {
       presetModels = [
         { 
-          id: 'claude-3-opus-20240229', 
-          name: 'Claude 3 Opus',
+          id: 'claude-3-opus-20240229',
           features: {
             reasoning: true,
-            image: true
+            image: true,
+            video: false,
+            voice: false
           }
         },
         { 
-          id: 'claude-3-sonnet-20240229', 
-          name: 'Claude 3 Sonnet',
+          id: 'claude-3-sonnet-20240229',
           features: {
             reasoning: false,
-            image: true
+            image: true,
+            video: false,
+            voice: false
           }
         },
         { 
-          id: 'claude-3-haiku-20240307', 
-          name: 'Claude 3 Haiku',
+          id: 'claude-3-haiku-20240307',
           features: {
             reasoning: false,
-            image: false
+            image: false,
+            video: false,
+            voice: false
           }
         }
       ];
     }
     
-    const updatedProviders = [...providers, {
-      ...newProvider,
+    // 创建新提供商，不再强制添加default模型
+    const newProviderData: AIProvider = {
       id: newId,
-      models: presetModels.length > 0 ? presetModels : [{ id: 'default', name: '默认模型' }],
-      defaultModelId: presetModels.length > 0 ? presetModels[0].id : 'default'
-    }];
+      name: newProvider.name!,
+      apiEndpoint: newProvider.apiEndpoint!,
+      apiKey: newProvider.apiKey || '',
+      models: presetModels, // 直接使用预设模型，可能为空数组
+      defaultModelId: presetModels.length > 0 ? presetModels[0].id : undefined
+    };
     
+    const updatedProviders = [...providers, newProviderData];
     setProviders(updatedProviders);
     storageService.saveProviders(updatedProviders);
     
@@ -341,24 +362,42 @@ const SettingsInterface: FC = () => {
   
   // 添加新模型
   const handleAddModel = () => {
-    if (!currentProvider || !newModel.name) {
-      toast.error('模型名称不能为空');
+    if (!currentProvider || !newModel.id) {
+      toast.error('模型ID不能为空');
       return;
     }
     
-    const newModelId = Date.now().toString();
+    // 检查模型ID是否已存在
+    const provider = providers.find(p => p.id === currentProvider);
+    if (provider?.models.some(m => m.id === newModel.id)) {
+      toast.error('模型ID已存在，请使用不同的ID');
+      return;
+    }
+    
     const updatedProviders = providers.map(provider => {
       if (provider.id === currentProvider) {
         // 如果这是第一个添加的模型，设为默认
         const isFirstModel = !provider.models || provider.models.length === 0;
         
+        // 创建新模型，使用用户输入的ID
+        const newModelData: AIModel = {
+          id: newModel.id!,
+          parameters: newModel.parameters,
+          features: newModel.features || {
+            reasoning: false,
+            image: false,
+            video: false,
+            voice: false
+          }
+        };
+        
         return {
           ...provider,
           models: [
             ...(provider.models || []),
-            { ...newModel, id: newModelId }
+            newModelData
           ],
-          defaultModelId: isFirstModel ? newModelId : provider.defaultModelId
+          defaultModelId: isFirstModel ? newModel.id : provider.defaultModelId
         };
       }
       return provider;
@@ -370,8 +409,6 @@ const SettingsInterface: FC = () => {
     // 重置表单
     setNewModel({
       id: '',
-      name: '',
-      parameters: {},
       features: {
         reasoning: false,
         image: false,
@@ -381,7 +418,7 @@ const SettingsInterface: FC = () => {
     });
     
     toast.success('新的模型已添加');
-    logService.info(`已添加新模型: ${newModel.name}`);
+    logService.info(`已添加新模型: ${newModel.id} (ID: ${newModel.id})`);
   };
   
   // 设置默认模型
@@ -398,7 +435,7 @@ const SettingsInterface: FC = () => {
     
     const provider = providers.find(p => p.id === providerId);
     const model = provider?.models.find(m => m.id === modelId);
-    logService.info(`已将 ${model?.name} 设为 ${provider?.name} 的默认模型`);
+    logService.info(`已将 ${model?.id} 设为 ${provider?.name} 的默认模型`);
     
     toast.success('默认模型已更新');
   };
@@ -406,8 +443,8 @@ const SettingsInterface: FC = () => {
   // 删除模型
   const handleDeleteModel = (providerId: string, modelId: string) => {
     const provider = providers.find(p => p.id === providerId);
-    if (!provider || provider.models.length <= 1) {
-      toast.error('至少保留一个模型');
+    if (!provider) {
+      toast.error('找不到提供商');
       return;
     }
     
@@ -420,8 +457,10 @@ const SettingsInterface: FC = () => {
         return {
           ...p,
           models: updatedModels,
-          // 如果删除的是默认模型，则选择第一个模型作为新的默认模型
-          defaultModelId: isDefaultModel ? updatedModels[0]?.id : p.defaultModelId
+          // 如果删除的是默认模型，重新设置默认模型
+          defaultModelId: isDefaultModel 
+            ? (updatedModels.length > 0 ? updatedModels[0].id : undefined)
+            : p.defaultModelId
         };
       }
       return p;
@@ -431,7 +470,7 @@ const SettingsInterface: FC = () => {
     storageService.saveProviders(updatedProviders);
     
     const model = provider.models.find(m => m.id === modelId);
-    logService.info(`已删除模型: ${model?.name}`);
+    logService.info(`已删除模型: ${model?.id}`);
     toast.success('模型已删除');
   };
 
@@ -464,7 +503,27 @@ const SettingsInterface: FC = () => {
     
     const provider = providers.find(p => p.id === providerId);
     const model = provider?.models.find(m => m.id === modelId);
-    logService.info(`已更新模型 ${model?.name} 的 ${feature} 功能: ${value}`);
+    logService.info(`已更新模型 ${model?.id} 的 ${feature} 功能: ${value}`);
+  };
+
+  // 新增：打开高级配置对话框
+  const handleAdvancedConfig = (providerId: string) => {
+    const provider = providers.find(p => p.id === providerId);
+    if (provider) {
+      setSelectedProvider(provider);
+      setAdvancedConfigOpen(true);
+    }
+  };
+
+  // 新增：保存高级配置
+  const handleAdvancedConfigSave = (updatedProvider: AIProvider) => {
+    const updatedProviders = providers.map(p => 
+      p.id === updatedProvider.id ? updatedProvider : p
+    );
+    storageService.saveProviders(updatedProviders);
+    setProviders(updatedProviders);
+    setAdvancedConfigOpen(false);
+    setSelectedProvider(null);
   };
 
   return (
@@ -549,6 +608,15 @@ const SettingsInterface: FC = () => {
                             <Settings size={16} />
                             <span className="ml-1">模型</span>
                           </Button>
+                          <Button 
+                            onClick={() => handleAdvancedConfig(provider.id)}
+                            variant="outline"
+                            size="sm"
+                            className="text-purple-500 cursor-pointer"
+                          >
+                            <Wrench size={16} />
+                            <span className="ml-1">高级</span>
+                          </Button>
                         </>
                       )}
                     </div>
@@ -584,8 +652,8 @@ const SettingsInterface: FC = () => {
                       <Label className="block mb-1">默认模型</Label>
                       <div className="text-sm text-gray-500">
                         {provider.models && provider.models.length > 0 ? (
-                          provider.models.find(m => m.id === provider.defaultModelId)?.name || 
-                          provider.models[0].name
+                          provider.models.find(m => m.id === provider.defaultModelId)?.id || 
+                          provider.models[0].id
                         ) : (
                           "未设置模型"
                         )}
@@ -768,100 +836,111 @@ const SettingsInterface: FC = () => {
               <div className="space-y-4 my-4">
                 <h3 className="font-medium text-sm text-gray-500">现有模型</h3>
                 
-                {providers.find(p => p.id === currentProvider)?.models.map(model => (
-                  <div key={model.id} className="p-3 border rounded-md space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <div className="font-medium">{model.name}</div>
-                        <div className="text-xs text-gray-500">ID: {model.id}</div>
-                      </div>
-                      <div className="flex gap-2 items-center">
-                        {providers.find(p => p.id === currentProvider)?.defaultModelId === model.id ? (
-                          <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded-full">默认</span>
-                        ) : (
+                {providers.find(p => p.id === currentProvider)?.models.length === 0 ? (
+                  <div className="text-center py-8 text-gray-500">
+                    <div className="text-sm">暂无模型</div>
+                    <div className="text-xs mt-1">请在下方添加新模型</div>
+                  </div>
+                ) : (
+                  providers.find(p => p.id === currentProvider)?.models.map(model => (
+                    <div key={model.id} className="p-3 border rounded-md space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="font-medium">{model.id}</div>
+                          <div className="text-xs text-gray-500">ID: {model.id}</div>
+                        </div>
+                        <div className="flex gap-2 items-center">
+                          {providers.find(p => p.id === currentProvider)?.defaultModelId === model.id ? (
+                            <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded-full">默认</span>
+                          ) : (
+                            <Button 
+                              variant="outline" 
+                              size="sm" 
+                              onClick={() => handleSetDefaultModel(currentProvider, model.id)}
+                            >
+                              设为默认
+                            </Button>
+                          )}
                           <Button 
                             variant="outline" 
                             size="sm" 
-                            onClick={() => handleSetDefaultModel(currentProvider, model.id)}
+                            className="text-destructive"
+                            onClick={() => handleDeleteModel(currentProvider, model.id)}
                           >
-                            设为默认
+                            <Trash2 size={14} />
                           </Button>
-                        )}
-                        <Button 
-                          variant="outline" 
-                          size="sm" 
-                          className="text-destructive"
-                          onClick={() => handleDeleteModel(currentProvider, model.id)}
-                          disabled={(providers.find(p => p.id === currentProvider)?.models.length || 0) <= 1}
-                        >
-                          <Trash2 size={14} />
-                        </Button>
+                        </div>
                       </div>
-                    </div>
-                    
-                    <div className="border-t pt-3">
-                      <div className="mb-2 flex justify-between items-center">
-                        <h4 className="text-sm font-medium">支持的功能</h4>
-                      </div>
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                        <div className="flex items-center space-x-2">
-                          <Checkbox 
-                            id={`reasoning-${model.id}`}
-                            checked={model.features?.reasoning || false}
-                            onCheckedChange={(checked) => 
-                              handleFeatureChange(currentProvider, model.id, 'reasoning', checked === true)
-                            }
-                          />
-                          <Label htmlFor={`reasoning-${model.id}`} className="text-sm">推理</Label>
+                      
+                      <div className="border-t pt-3">
+                        <div className="mb-2 flex justify-between items-center">
+                          <h4 className="text-sm font-medium">支持的功能</h4>
                         </div>
-                        <div className="flex items-center space-x-2">
-                          <Checkbox 
-                            id={`image-${model.id}`}
-                            checked={model.features?.image || false}
-                            onCheckedChange={(checked) => 
-                              handleFeatureChange(currentProvider, model.id, 'image', checked === true)
-                            }
-                          />
-                          <Label htmlFor={`image-${model.id}`} className="text-sm">图片</Label>
-                        </div>
-                        <div className="flex items-center space-x-2">
-                          <Checkbox 
-                            id={`video-${model.id}`}
-                            checked={model.features?.video || false}
-                            onCheckedChange={(checked) => 
-                              handleFeatureChange(currentProvider, model.id, 'video', checked === true)
-                            }
-                          />
-                          <Label htmlFor={`video-${model.id}`} className="text-sm">视频</Label>
-                        </div>
-                        <div className="flex items-center space-x-2">
-                          <Checkbox 
-                            id={`voice-${model.id}`}
-                            checked={model.features?.voice || false}
-                            onCheckedChange={(checked) => 
-                              handleFeatureChange(currentProvider, model.id, 'voice', checked === true)
-                            }
-                          />
-                          <Label htmlFor={`voice-${model.id}`} className="text-sm">语音</Label>
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                          <div className="flex items-center space-x-2">
+                            <Checkbox 
+                              id={`reasoning-${model.id}`}
+                              checked={model.features?.reasoning || false}
+                              onCheckedChange={(checked) => 
+                                handleFeatureChange(currentProvider, model.id, 'reasoning', checked === true)
+                              }
+                            />
+                            <Label htmlFor={`reasoning-${model.id}`} className="text-sm">推理</Label>
+                          </div>
+                          <div className="flex items-center space-x-2">
+                            <Checkbox 
+                              id={`image-${model.id}`}
+                              checked={model.features?.image || false}
+                              onCheckedChange={(checked) => 
+                                handleFeatureChange(currentProvider, model.id, 'image', checked === true)
+                              }
+                            />
+                            <Label htmlFor={`image-${model.id}`} className="text-sm">图片</Label>
+                          </div>
+                          <div className="flex items-center space-x-2">
+                            <Checkbox 
+                              id={`video-${model.id}`}
+                              checked={model.features?.video || false}
+                              onCheckedChange={(checked) => 
+                                handleFeatureChange(currentProvider, model.id, 'video', checked === true)
+                              }
+                            />
+                            <Label htmlFor={`video-${model.id}`} className="text-sm">视频</Label>
+                          </div>
+                          <div className="flex items-center space-x-2">
+                            <Checkbox 
+                              id={`voice-${model.id}`}
+                              checked={model.features?.voice || false}
+                              onCheckedChange={(checked) => 
+                                handleFeatureChange(currentProvider, model.id, 'voice', checked === true)
+                              }
+                            />
+                            <Label htmlFor={`voice-${model.id}`} className="text-sm">语音</Label>
+                          </div>
                         </div>
                       </div>
                     </div>
-                  </div>
-                ))}
+                  ))
+                )}
               </div>
               
               <div className="border-t pt-4">
                 <h3 className="font-medium text-sm text-gray-500 mb-2">添加新模型</h3>
                 <div className="space-y-3">
                   <div>
-                    <Label htmlFor="new-model-name" className="block mb-1">模型名称</Label>
+                    <Label htmlFor="new-model-id" className="block mb-1">模型ID</Label>
                     <Input
-                      id="new-model-name"
-                      value={newModel.name}
-                      onChange={(e) => setNewModel({ ...newModel, name: e.target.value })}
-                      placeholder="例如: GPT-4 Turbo"
+                      id="new-model-id"
+                      value={newModel.id}
+                      onChange={(e) => setNewModel({ ...newModel, id: e.target.value })}
+                      placeholder="例如: deepseek-chat, gpt-4, claude-3-sonnet-20240229"
                       className="mb-3"
                     />
+                    {providers.find(p => p.id === currentProvider)?.name.toLowerCase().includes('deepseek') && (
+                      <div className="text-xs text-blue-600 mb-3">
+                        DeepSeek 官方模型ID: <code>deepseek-chat</code> 或 <code>deepseek-reasoner</code>
+                      </div>
+                    )}
                     
                     <div className="mb-2">
                       <h4 className="text-sm font-medium mb-1">支持的功能</h4>
@@ -934,7 +1013,7 @@ const SettingsInterface: FC = () => {
                     </div>
                   </div>
                   
-                  <Button onClick={handleAddModel} className="w-full">
+                  <Button onClick={handleAddModel} className="w-full" disabled={!newModel.id}>
                     <Plus size={16} className="mr-1" />
                     添加模型
                   </Button>
@@ -944,6 +1023,14 @@ const SettingsInterface: FC = () => {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* 高级配置对话框 */}
+      <AdvancedProviderConfig
+        open={advancedConfigOpen}
+        onClose={() => setAdvancedConfigOpen(false)}
+        provider={selectedProvider}
+        onSave={handleAdvancedConfigSave}
+      />
     </div>
   );
 };

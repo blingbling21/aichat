@@ -2,7 +2,7 @@ import React from 'react';
 import ReactMarkdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import remarkGfm from 'remark-gfm';
-import 'highlight.js/styles/github.css';
+import 'highlight.js/styles/atom-one-light.css';
 import { cn } from '@/lib/utils';
 import { type Components } from 'react-markdown';
 
@@ -30,14 +30,34 @@ export function Markdown({ content, className }: MarkdownProps) {
       const key = language ? language[1] : 'text';
       return !inline ? (
         <div className="not-prose relative" key={key}>
-          <pre className={cn("rounded-md p-4 my-2 bg-slate-900 dark:bg-slate-800 overflow-x-auto", className)}>
-            <code className={cn("text-sm font-mono", className)} {...props}>
+          <pre className={cn(
+            "rounded-lg p-4 my-3 border overflow-x-auto",
+            "bg-gray-50 border-gray-200 text-gray-900", // 亮色模式
+            "dark:bg-gray-900 dark:border-gray-700 dark:text-gray-100", // 暗色模式
+            "font-mono text-sm leading-relaxed",
+            className
+          )} style={{
+            // 强制覆盖highlight.js的颜色
+            color: 'inherit'
+          }}>
+            <code className={cn(
+              "block w-full",
+              "text-gray-900 dark:text-gray-100", // 确保文字颜色
+              className
+            )} style={{
+              color: 'inherit',
+              background: 'transparent'
+            }} {...props}>
               {children}
             </code>
           </pre>
         </div>
       ) : (
-        <code className="px-1 py-0.5 rounded-sm bg-muted font-mono text-sm" {...props}>
+        <code className={cn(
+          "px-2 py-1 rounded text-sm font-mono",
+          "bg-gray-100 text-gray-900",
+          "dark:bg-gray-800 dark:text-gray-100"
+        )} {...props}>
           {children}
         </code>
       );
