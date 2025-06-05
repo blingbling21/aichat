@@ -47,6 +47,12 @@ export type CustomAPIConfig = {
   method: 'GET' | 'POST' | 'PUT' | 'DELETE';
   contentType: string;
   
+  // URL模板配置 - 🆕 新增
+  urlTemplate?: string; // 支持模板变量，如 "https://api.example.com/models/{model}/generate"
+  
+  // 查询参数配置 - 🆕 新增
+  queryParams?: APIQueryParamConfig[];
+  
   // 请求头配置 - 支持模板变量
   headers: APIHeaderConfig[];
   
@@ -75,7 +81,18 @@ export type CustomAPIConfig = {
   path: 'model',                    // JSON路径
   valueType: 'template',            // 值类型：static/template/dynamic
   valueTemplate: '{model}',         // 模板值
-  description: '模型名称'           // 说明
+  description: '模型名称',          // 说明
+  // 🆕 消息格式转换配置
+  messageTransform?: {
+    format: 'openai' | 'gemini' | 'claude' | 'custom', // 消息格式类型
+    customMapping?: {               // 自定义字段映射
+      roleField?: string;           // 角色字段名，默认 "role"
+      contentField?: string;        // 内容字段名，默认 "content"
+      userRoleValue?: string;       // 用户角色值，默认 "user"
+      assistantRoleValue?: string;  // 助手角色值，默认 "assistant"
+      wrapperField?: string;        // 包装字段，如Gemini的"parts"
+    };
+  };
 }
 ```
 
@@ -96,7 +113,71 @@ export type CustomAPIConfig = {
 }
 ```
 
-### 3. 模板变量系统
+### 3. 🆕 URL模板化和查询参数
+
+#### URL模板化
+```typescript
+{
+  urlTemplate: "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+}
+```
+
+#### 查询参数配置
+```typescript
+{
+  queryParams: [
+    {
+      key: "key",
+      valueType: "template", 
+      valueTemplate: "{apiKey}",
+      description: "API密钥"
+    }
+  ]
+}
+```
+
+### 4. 消息格式转换系统
+
+系统现在支持多种AI服务的消息格式：
+
+#### OpenAI格式
+```typescript
+{
+  messageTransform: {
+    format: "openai"  // 标准的messages数组格式
+  }
+}
+```
+
+#### Gemini格式  
+```typescript
+{
+  messageTransform: {
+    format: "gemini",
+    customMapping: {
+      roleField: "role",
+      userRoleValue: "user", 
+      assistantRoleValue: "model"  // Gemini使用model而不是assistant
+    }
+  }
+}
+```
+
+#### 自定义格式
+```typescript
+{
+  messageTransform: {
+    format: "custom",
+    customMapping: {
+      roleField: "speaker",
+      contentField: "text", 
+      wrapperField: "segments"
+    }
+  }
+}
+```
+
+### 5. 模板变量系统
 
 支持以下模板变量：
 - `{apiKey}`: 用户设置的API密钥
@@ -104,8 +185,11 @@ export type CustomAPIConfig = {
 - `{stream}`: 是否启用流式返回
 - `{message}`: 当前用户消息
 - `{history}`: 历史对话记录
+- `{systemPrompt}`: 系统提示词
+- `{temperature}`: 温度参数
+- `{endpoint}`: API端点URL
 
-### 4. 完整的流式支持
+### 6. 完整的流式支持
 
 - 自定义SSE数据格式解析
 - 支持推理内容提取（如DeepSeek R1）
@@ -198,6 +282,88 @@ private async callAI(...) {
 用户可以配置任何符合HTTP API规范的AI服务：
 - 国内外各种大语言模型API
 - 自建的AI服务
+
+## 🚀 最新增强功能
+
+### URL模板化支持
+现在支持在URL中嵌入变量，特别适用于像Gemini这样需要在URL路径中指定模型的API：
+
+```json
+{
+  "urlTemplate": "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+}
+```
+
+### 查询参数支持
+支持向URL添加查询参数，适用于通过URL参数传递API密钥的服务：
+
+```json
+{
+  "queryParams": [
+    {
+      "key": "key",
+      "valueType": "template",
+      "valueTemplate": "{apiKey}"
+    }
+  ]
+}
+```
+
+### 多格式消息转换
+系统现在智能支持不同AI服务的消息格式：
+
+- **OpenAI格式**: 标准的`messages`数组
+- **Gemini格式**: `contents`数组，助手角色为`model`，消息包装在`parts`中
+- **Claude格式**: 系统消息单独的`system`字段
+- **自定义格式**: 完全可配置的字段名称和结构
+
+### Gemini API完整配置示例
+
+```json
+{
+  "method": "POST",
+  "contentType": "application/json",
+  "urlTemplate": "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+  "queryParams": [
+    {
+      "key": "key",
+      "valueType": "template", 
+      "valueTemplate": "{apiKey}"
+    }
+  ],
+  "headers": [],
+  "bodyFields": [
+    {
+      "path": "contents",
+      "valueType": "dynamic",
+      "messageTransform": {
+        "format": "gemini"
+      }
+    },
+    {
+      "path": "generationConfig.temperature",
+      "valueType": "template",
+      "valueTemplate": "{temperature}"
+    }
+  ],
+  "response": {
+    "contentPath": "candidates[0].content.parts[0].text"
+  }
+}
+```
+
+## 📖 更多配置示例
+
+详细的配置示例请参考：[API_CONFIG_EXAMPLES.md](./API_CONFIG_EXAMPLES.md)
+
+该文档包含：
+- DeepSeek API配置（支持推理模型）
+- Google Gemini API配置 
+- Anthropic Claude API配置
+- 通义千问API配置
+- 完全自定义API配置示例
+
+通过这些增强功能，系统现在能够支持几乎所有主流AI服务的API格式差异！
 - 第三方AI聚合服务  
 - 企业内部AI服务
 

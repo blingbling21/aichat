@@ -21,6 +21,14 @@ import {
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import AdvancedProviderConfig from '../components/AdvancedProviderConfig';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { httpService } from '../services/http';
 
 /**
  * 设置界面组件
@@ -31,8 +39,9 @@ const SettingsInterface: FC = () => {
   const [providers, setProviders] = useState<AIProvider[]>([]);
   const [proxySettings, setProxySettings] = useState<ProxySettings>({
     enabled: false,
+    type: 'http',
     host: '',
-    port: '',
+    port: 0,
     requiresAuth: false,
     username: '',
     password: ''
@@ -68,6 +77,9 @@ const SettingsInterface: FC = () => {
   
   // 测试连接状态
   const [testingProvider, setTestingProvider] = useState<string | null>(null);
+  
+  // 代理测试状态
+  const [testingProxy, setTestingProxy] = useState(false);
   
   // 模型管理对话框状态
   const [modelDialogOpen, setModelDialogOpen] = useState(false);
@@ -331,6 +343,34 @@ const SettingsInterface: FC = () => {
       toast.error(errorMsg);
     } finally {
       setTestingProvider(null);
+    }
+  };
+  
+  // 测试代理连接
+  const handleTestProxy = async () => {
+    if (!proxySettings.enabled) {
+      toast.error('请先启用代理');
+      return;
+    }
+
+    if (!proxySettings.host || !proxySettings.port) {
+      toast.error('请填写代理主机和端口');
+      return;
+    }
+
+    setTestingProxy(true);
+    logService.info(`测试代理连接: ${proxySettings.type}://${proxySettings.host}:${proxySettings.port}`);
+
+    try {
+      const result = await httpService.testProxyConnection(proxySettings);
+      logService.info(`代理测试成功: ${result}`);
+      toast.success(`代理连接成功！${result.includes('ip') ? '获取到外部IP信息' : ''}`);
+    } catch (error) {
+      const errorMsg = `代理测试失败: ${error instanceof Error ? error.message : '未知错误'}`;
+      logService.error(errorMsg);
+      toast.error(errorMsg);
+    } finally {
+      setTestingProxy(false);
     }
   };
   
@@ -735,6 +775,24 @@ const SettingsInterface: FC = () => {
           
           {proxySettings.enabled && (
             <>
+              <div className="mb-4">
+                <Label htmlFor="proxy-type" className="block mb-1">代理类型</Label>
+                <Select
+                  value={proxySettings.type}
+                  onValueChange={(value: 'http' | 'https' | 'socks5') => handleUpdateProxy('type', value)}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="http">HTTP</SelectItem>
+                    <SelectItem value="https">HTTPS</SelectItem>
+                    <SelectItem value="socks5">SOCKS5</SelectItem>
+                  </SelectContent>
+                </Select>
+
+              </div>
+              
               <div className="flex gap-4">
                 <div className="flex-1">
                   <Label htmlFor="proxy-host" className="block mb-1">主机</Label>
@@ -751,9 +809,12 @@ const SettingsInterface: FC = () => {
                   <Label htmlFor="proxy-port" className="block mb-1">端口</Label>
                   <Input
                     id="proxy-port"
-                    type="text"
-                    value={proxySettings.port}
-                    onChange={(e) => handleUpdateProxy('port', e.target.value)}
+                    type="number"
+                    value={proxySettings.port.toString()}
+                    onChange={(e) => {
+                      const port = parseInt(e.target.value) || 0;
+                      handleUpdateProxy('port', port);
+                    }}
                     placeholder="例如: 7890"
                   />
                 </div>
@@ -792,6 +853,30 @@ const SettingsInterface: FC = () => {
                   </div>
                 </div>
               )}
+              
+              {/* 测试代理连接按钮 */}
+              <div className="mt-4 pt-4 border-t">
+                <Button
+                  onClick={handleTestProxy}
+                  disabled={!proxySettings.enabled || !proxySettings.host || !proxySettings.port || testingProxy}
+                  variant="outline"
+                  className="w-full cursor-pointer"
+                >
+                  {testingProxy ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-gray-300 border-t-blue-600 rounded-full animate-spin mr-2" />
+                      测试中...
+                    </>
+                  ) : (
+                    '测试代理连接'
+                  )}
+                </Button>
+                {proxySettings.type === 'socks5' && (
+                  <div className="text-xs text-blue-600 mt-2">
+                    ✅ 此应用已支持 SOCKS5 代理（通过 Rust 后端实现）
+                  </div>
+                )}
+              </div>
             </>
           )}
         </CardContent>

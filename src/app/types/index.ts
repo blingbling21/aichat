@@ -47,10 +47,26 @@ export type APIHeaderConfig = {
  */
 export type APIBodyFieldConfig = {
   path: string; // JSON路径，如 "model", "messages", "messages[].role"
-  valueType: 'static' | 'dynamic' | 'template';
+  valueType: 'static' | 'dynamic' | 'template' | 'visual_structure'; // 新增visual_structure类型
   value?: string | number | boolean; // 静态值
   valueTemplate?: string; // 模板，如 "{model}", "{message}", "{history}"
   description?: string; // 字段说明
+  
+  // 传统消息格式转换配置（向后兼容）
+  messageTransform?: {
+    format: 'openai' | 'gemini' | 'claude' | 'custom';
+    customMapping?: {
+      roleField?: string;
+      contentField?: string;
+      systemRoleValue?: string;
+      userRoleValue?: string;
+      assistantRoleValue?: string;
+      wrapperField?: string;
+    };
+  };
+  
+  // 新增：可视化消息结构配置
+  messageStructure?: MessageStructureConfig;
 };
 
 /**
@@ -83,6 +99,12 @@ export type CustomAPIConfig = {
   method: 'GET' | 'POST' | 'PUT' | 'DELETE';
   contentType: string;
   
+  // URL模板配置 - 新增
+  urlTemplate?: string; // 支持模板变量，如 "https://api.example.com/models/{model}/generate"
+  
+  // 查询参数配置 - 新增
+  queryParams?: APIQueryParamConfig[];
+  
   // 请求头配置
   headers: APIHeaderConfig[];
   
@@ -96,6 +118,17 @@ export type CustomAPIConfig = {
   templateVariables?: {
     [key: string]: string; // 变量名 -> 说明
   };
+};
+
+/**
+ * API查询参数配置 - 新增
+ */
+export type APIQueryParamConfig = {
+  key: string;
+  value?: string;
+  valueTemplate?: string; // 支持模板，如 "{apiKey}"
+  valueType: 'static' | 'template';
+  description?: string;
 };
 
 /**
@@ -125,12 +158,13 @@ export type AIProvider = {
  */
 export type ProxySettings = {
   enabled: boolean;
+  type: 'http' | 'https' | 'socks5'; // 新增：代理类型
   host: string;
-  port: string;
+  port: number;
   requiresAuth: boolean;
   username: string;
   password: string;
-}; 
+};
 
 /**
  * AI Agent类型定义
@@ -224,4 +258,36 @@ export type SceneMessage = {
   content: string;
   timestamp: Date;
   metadata?: Record<string, string | boolean | number | null>;
+};
+
+/**
+ * JSON节点类型定义 - 用于可视化JSON结构生成器
+ */
+export type JsonNode = {
+  id: string;
+  type: 'object' | 'array' | 'string' | 'number' | 'boolean' | 'template';
+  key?: string; // 对象的键名
+  value?: string | number | boolean; // 静态值
+  templateVariable?: string; // 模板变量，如 'role', 'content', 'message'
+  description?: string; // 节点说明
+  children?: JsonNode[]; // 子节点
+  isRequired?: boolean; // 是否必需
+  arrayItemTemplate?: JsonNode; // 数组项的模板结构
+};
+
+/**
+ * 消息结构配置 - 新的消息配置方式
+ */
+export type MessageStructureConfig = {
+  enabled: boolean; // 是否启用可视化结构配置
+  rootNode: JsonNode; // 根节点
+  roleMapping: { // 角色映射
+    user: string;
+    assistant: string;
+    system: string;
+  };
+  previewData?: { // 预览数据
+    generatedTemplate: string;
+    sampleOutput: string;
+  };
 }; 

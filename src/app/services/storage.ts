@@ -54,8 +54,9 @@ class StorageService {
       if (!isBrowser) {
         return {
           enabled: false,
+          type: 'http',
           host: '',
-          port: '',
+          port: 0,
           requiresAuth: false,
           username: '',
           password: ''
@@ -67,8 +68,9 @@ class StorageService {
         ? JSON.parse(settings) 
         : {
             enabled: false,
+            type: 'http',
             host: '',
-            port: '',
+            port: 0,
             requiresAuth: false,
             username: '',
             password: ''
@@ -77,8 +79,9 @@ class StorageService {
       logService.error('获取代理设置失败:', error);
       return {
         enabled: false,
+        type: 'http',
         host: '',
-        port: '',
+        port: 0,
         requiresAuth: false,
         username: '',
         password: ''

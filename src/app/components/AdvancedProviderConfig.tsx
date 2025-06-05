@@ -21,7 +21,8 @@ import {
 } from "@/components/ui/select";
 import { Plus, Trash2, ChevronDown, HelpCircle, Info } from 'lucide-react';
 import { toast } from 'sonner';
-import { AIProvider, CustomAPIConfig, APIHeaderConfig, APIBodyFieldConfig } from '../types';
+import { AIProvider, CustomAPIConfig, APIHeaderConfig, APIBodyFieldConfig, MessageStructureConfig } from '../types';
+import { JsonStructureBuilder } from './JsonStructureBuilder';
 
 interface AdvancedProviderConfigProps {
   open: boolean;
@@ -212,7 +213,7 @@ const AdvancedProviderConfig: React.FC<AdvancedProviderConfigProps> = ({
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="!max-w-[95vw] !w-full max-h-[90vh] overflow-y-auto sm:!max-w-[95vw]">
         <DialogHeader>
           <DialogTitle>高级API配置 - {provider?.name}</DialogTitle>
           <DialogDescription>
@@ -287,8 +288,8 @@ const AdvancedProviderConfig: React.FC<AdvancedProviderConfigProps> = ({
                 <Card key={index}>
                   <CardContent className="p-4">
                     <div className="space-y-3">
-                      <div className="grid grid-cols-3 gap-2 items-end">
-                        <div>
+                      <div className="flex gap-2 items-end">
+                        <div className="flex-1">
                           <Label>键名</Label>
                           <Input
                             value={header.key}
@@ -296,7 +297,7 @@ const AdvancedProviderConfig: React.FC<AdvancedProviderConfigProps> = ({
                             placeholder="如: Authorization"
                           />
                         </div>
-                        <div>
+                        <div className="flex-1">
                           <Label>值类型</Label>
                           <Select
                             value={header.valueTemplate ? 'template' : 'static'}
@@ -323,6 +324,7 @@ const AdvancedProviderConfig: React.FC<AdvancedProviderConfigProps> = ({
                           onClick={() => removeHeader(index)} 
                           variant="destructive" 
                           size="sm"
+                          className="px-2"
                         >
                           <Trash2 className="h-4 w-4" />
                         </Button>
@@ -372,8 +374,8 @@ const AdvancedProviderConfig: React.FC<AdvancedProviderConfigProps> = ({
               {config.bodyFields.map((field, index) => (
                 <Card key={index}>
                   <CardContent className="p-4 space-y-3">
-                    <div className="grid grid-cols-3 gap-2 items-center">
-                      <div>
+                    <div className="flex gap-2 items-center">
+                      <div className="flex-1">
                         <Label>字段路径</Label>
                         <Input
                           value={field.path}
@@ -381,7 +383,7 @@ const AdvancedProviderConfig: React.FC<AdvancedProviderConfigProps> = ({
                           placeholder="如: model, messages, temperature"
                         />
                       </div>
-                      <div>
+                      <div className="flex-1">
                         <Label>值类型</Label>
                         <Select
                           value={field.valueType}
@@ -394,6 +396,7 @@ const AdvancedProviderConfig: React.FC<AdvancedProviderConfigProps> = ({
                             <SelectItem value="static">静态值</SelectItem>
                             <SelectItem value="template">模板</SelectItem>
                             <SelectItem value="dynamic">动态生成</SelectItem>
+                            <SelectItem value="visual_structure">可视化结构</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
@@ -401,6 +404,7 @@ const AdvancedProviderConfig: React.FC<AdvancedProviderConfigProps> = ({
                         onClick={() => removeBodyField(index)} 
                         variant="destructive" 
                         size="sm"
+                        className="px-2 mt-6"
                       >
                         <Trash2 className="h-4 w-4" />
                       </Button>
@@ -435,6 +439,35 @@ const AdvancedProviderConfig: React.FC<AdvancedProviderConfigProps> = ({
                         />
                       </div>
                     </div>
+                    
+                    {/* 可视化结构配置 */}
+                    {field.valueType === 'visual_structure' && (
+                      <div className="mt-4">
+                        <JsonStructureBuilder
+                          config={field.messageStructure || {
+                            enabled: false,
+                            rootNode: {
+                              id: 'root',
+                              type: 'array',
+                              key: field.path,
+                              description: '消息数组',
+                              children: []
+                            },
+                            roleMapping: {
+                              user: 'user',
+                              assistant: 'assistant',
+                              system: 'system'
+                            }
+                          }}
+                          onChange={(messageStructure: MessageStructureConfig) => {
+                            const updatedFields = [...config.bodyFields];
+                            updatedFields[index] = { ...field, messageStructure };
+                            setConfig({ ...config, bodyFields: updatedFields });
+                          }}
+                          fieldPath={field.path}
+                        />
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
               ))}

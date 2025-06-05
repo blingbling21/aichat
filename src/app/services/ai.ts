@@ -1,4 +1,4 @@
-import { AIProvider, Message, ProxySettings, Agent, SceneParticipant, SceneMessage, Scene, CustomAPIConfig, APIBodyFieldConfig, APIResponseConfig } from '../types';
+import { AIProvider, Message, ProxySettings, Agent, SceneParticipant, SceneMessage, Scene, CustomAPIConfig, APIBodyFieldConfig, APIResponseConfig, MessageStructureConfig, JsonNode } from '../types';
 import { storageService } from './storage';
 import { logService } from './log';
 
@@ -262,6 +262,38 @@ class AIService {
       logService.info(`⚡ 温度参数未设置，将使用默认值`);
     }
     
+    // 构建URL - 支持模板化
+    let finalUrl = provider.apiEndpoint;
+    if (config.urlTemplate) {
+      finalUrl = String(this.processTemplate(config.urlTemplate, {
+        apiKey: provider.apiKey,
+        model: modelId,
+        endpoint: provider.apiEndpoint
+      }));
+    }
+    
+    // 添加查询参数
+    if (config.queryParams && config.queryParams.length > 0) {
+      const url = new URL(finalUrl);
+      for (const paramConfig of config.queryParams) {
+        let paramValue = paramConfig.value || '';
+        
+        if (paramConfig.valueType === 'template' && paramConfig.valueTemplate) {
+          const templateResult = this.processTemplate(paramConfig.valueTemplate, {
+            apiKey: provider.apiKey,
+            model: modelId,
+            endpoint: provider.apiEndpoint
+          });
+          paramValue = String(templateResult);
+        }
+        
+        if (paramValue) {
+          url.searchParams.set(paramConfig.key, paramValue);
+        }
+      }
+      finalUrl = url.toString();
+    }
+    
     const options: RequestInit = {
       method: config.method,
       headers: {
@@ -324,7 +356,7 @@ class AIService {
     }
 
     return {
-      url: provider.apiEndpoint,
+      url: finalUrl,
       options
     };
   }
@@ -429,47 +461,27 @@ class AIService {
         
         return templateResult;
         
+      case 'visual_structure':
+        // 处理可视化结构配置的消息
+        if (fieldConfig.messageStructure?.enabled) {
+          logService.debug(`使用可视化结构生成消息: ${fieldConfig.path}`);
+          return this.buildVisualStructureMessages(context, fieldConfig.messageStructure);
+        }
+        return [];
+        
       case 'dynamic':
         // 处理动态值，如构建消息数组
-        if (fieldConfig.path === 'messages') {
-          logService.debug('开始构建动态messages字段');
-          const messages: { role: string; content: string }[] = [];
+        if (fieldConfig.path === 'messages' || fieldConfig.path === 'contents') {
+          logService.debug(`开始构建动态${fieldConfig.path}字段`);
           
-          // 添加系统提示词
-          if (context.systemPrompt) {
-          messages.push({
-            role: 'system',
-              content: context.systemPrompt
-            });
-            logService.debug('添加了系统提示词消息');
-          }
-          
-          // 添加历史消息（注意：history中已经包含了当前用户消息，不需要单独添加）
-          if (context.history) {
-            messages.push(...context.history);
-            logService.debug(`添加了 ${context.history.length} 条历史消息（包含当前消息）`);
-            // 详细记录每条历史消息
-            context.history.forEach((msg, index) => {
-              logService.info(`历史消息[${index}] ${msg.role}: ${msg.content.substring(0, 100)}${msg.content.length > 100 ? '...' : ''}`);
-            });
-          } else {
-            // 如果没有历史记录，则添加当前消息
-            messages.push({
-          role: 'user',
-              content: context.message
-            });
-            logService.debug('没有历史记录，添加了当前用户消息');
-            logService.info(`当前消息: ${context.message}`);
-          }
-          
-          logService.debug(`动态messages字段最终包含 ${messages.length} 条消息`);
-          logService.info('=== 发送给AI的完整消息历史 ===');
-          messages.forEach((msg, index) => {
-            logService.info(`消息[${index}] ${msg.role}: ${msg.content}`);
-          });
-          logService.info('=== 消息历史结束 ===');
-          
-          return messages;
+          // 根据消息转换配置决定格式
+          const transform = fieldConfig.messageTransform;
+          return this.buildMessagesArray(context, transform);
+        }
+        
+        // Claude格式的系统消息单独字段处理
+        if (fieldConfig.path === 'system' && context.systemPrompt) {
+          return context.systemPrompt;
         }
         
         logService.debug(`处理其他动态字段: ${fieldConfig.path}`);
@@ -479,6 +491,102 @@ class AIService {
       default:
         return fieldConfig.value;
     }
+  }
+
+  /**
+   * 构建消息数组，支持不同格式转换
+   */
+  private buildMessagesArray(
+    context: {
+      message: string;
+      history?: { role: 'user' | 'assistant'; content: string }[];
+      systemPrompt?: string;
+    },
+    transform?: {
+      format: 'openai' | 'gemini' | 'claude' | 'custom';
+      customMapping?: {
+        roleField?: string;
+        contentField?: string;
+        systemRoleValue?: string;
+        userRoleValue?: string;
+        assistantRoleValue?: string;
+        wrapperField?: string;
+      };
+    }
+  ): unknown[] {
+    const format = transform?.format || 'openai';
+    const mapping = transform?.customMapping || {};
+    
+    // 默认字段映射
+    const roleField = mapping.roleField || 'role';
+    const contentField = mapping.contentField || 'content';
+    const systemRole = mapping.systemRoleValue || 'system';
+    const userRole = mapping.userRoleValue || 'user';
+    const assistantRole = mapping.assistantRoleValue || 'assistant';
+    
+    const messages: unknown[] = [];
+    
+    // 添加系统提示词（Claude格式除外，Claude的系统消息是单独字段）
+    if (context.systemPrompt && format !== 'claude') {
+      if (format === 'gemini') {
+        // Gemini格式：contents数组，系统消息需要特殊处理
+        messages.push({
+          [roleField]: systemRole,
+          parts: [{ text: context.systemPrompt }]
+        });
+      } else {
+        // OpenAI格式
+        const message: Record<string, unknown> = {
+          [roleField]: systemRole,
+          [contentField]: context.systemPrompt
+        };
+        messages.push(message);
+      }
+      logService.debug('添加了系统提示词消息');
+    }
+    
+    // 处理历史消息和当前消息
+    const allMessages = context.history ? [...context.history] : [
+      { role: 'user' as const, content: context.message }
+    ];
+    
+    for (const msg of allMessages) {
+      if (format === 'gemini') {
+        // Gemini格式转换
+        const role = msg.role === 'user' ? userRole : 
+                    msg.role === 'assistant' ? 'model' : msg.role; // Gemini使用model而不是assistant
+        
+        messages.push({
+          [roleField]: role,
+          parts: [{ text: msg.content }]
+        });
+      } else {
+        // OpenAI/Claude格式
+        const role = msg.role === 'user' ? userRole : 
+                    msg.role === 'assistant' ? assistantRole : msg.role;
+        
+        const message: Record<string, unknown> = {
+          [roleField]: role,
+          [contentField]: msg.content
+        };
+        
+        // 如果有包装字段（用于自定义格式）
+        if (mapping.wrapperField) {
+          message[mapping.wrapperField] = [{ [contentField]: msg.content }];
+        }
+        
+        messages.push(message);
+      }
+    }
+    
+    logService.debug(`构建了${format}格式的消息数组，包含 ${messages.length} 条消息`);
+    logService.info('=== 发送给AI的完整消息历史 ===');
+    messages.forEach((msg, index) => {
+      logService.info(`消息[${index}] ${JSON.stringify(msg)}`);
+    });
+    logService.info('=== 消息历史结束 ===');
+    
+    return messages;
   }
 
   /**
@@ -1370,6 +1478,110 @@ class AIService {
     } finally {
       reader.releaseLock();
     }
+  }
+
+  /**
+   * 构建可视化结构消息
+   */
+  private buildVisualStructureMessages(
+    context: {
+      message: string;
+      history?: { role: 'user' | 'assistant'; content: string }[];
+      modelId?: string;
+      systemPrompt?: string;
+      isStream?: boolean;
+      provider: AIProvider;
+      temperature?: number;
+    },
+    structureConfig: MessageStructureConfig
+  ): unknown {
+    // 准备模板变量数据
+    const templateData = {
+      message: context.message,
+      model: context.modelId,
+      stream: context.isStream,
+      apiKey: context.provider.apiKey,
+      systemPrompt: context.systemPrompt,
+      temperature: context.temperature || 0.7
+    };
+
+    // 构建历史消息
+    const allMessages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }> = [];
+    
+    // 添加系统消息
+    if (context.systemPrompt) {
+      allMessages.push({
+        role: 'system',
+        content: context.systemPrompt
+      });
+    }
+    
+    // 添加历史消息
+    if (context.history) {
+      allMessages.push(...context.history);
+    }
+    
+    // 添加当前用户消息
+    allMessages.push({
+      role: 'user',
+      content: context.message
+    });
+
+    // 根据结构配置生成消息数组
+    return allMessages.map(msg => this.generateFromJsonNode(
+      structureConfig.rootNode.arrayItemTemplate || structureConfig.rootNode,
+      {
+        ...templateData,
+        role: this.mapRole(msg.role, structureConfig.roleMapping),
+        content: msg.content
+      }
+    ));
+  }
+
+  /**
+   * 根据JSON节点生成数据
+   */
+  private generateFromJsonNode(
+    node: JsonNode,
+    templateData: Record<string, unknown>
+  ): unknown {
+    switch (node.type) {
+      case 'template':
+        const varName = node.templateVariable;
+        return varName ? templateData[varName] : '';
+      
+      case 'string':
+      case 'number':
+      case 'boolean':
+        return node.value;
+      
+      case 'array':
+        if (node.arrayItemTemplate) {
+          return [this.generateFromJsonNode(node.arrayItemTemplate, templateData)];
+        }
+        return [];
+      
+      case 'object':
+        const obj: Record<string, unknown> = {};
+        if (node.children) {
+          node.children.forEach(child => {
+            if (child.key) {
+              obj[child.key] = this.generateFromJsonNode(child, templateData);
+            }
+          });
+        }
+        return obj;
+      
+      default:
+        return '';
+    }
+  }
+
+  /**
+   * 映射角色值
+   */
+  private mapRole(role: 'user' | 'assistant' | 'system', roleMapping: { user: string; assistant: string; system: string }): string {
+    return roleMapping[role] || role;
   }
 }
 

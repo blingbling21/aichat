@@ -32,3 +32,9 @@ tracing = "0.1.41"
 # tracing的订阅器库，提供日志收集和处理功能
 # env-filter特性允许通过环境变量控制日志级别
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+# HTTP客户端库，支持SOCKS5代理
+reqwest = { version = "0.12", features = ["json", "stream", "socks"] }
+# 异步运行时
+tokio = { version = "1.45", features = ["full"] }
+# URL解析库
+url = "2.0"
