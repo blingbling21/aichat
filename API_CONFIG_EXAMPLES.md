@@ -65,6 +65,8 @@ DeepSeek使用OpenAI兼容格式，支持推理模型。
 
 Gemini使用Google特有的API格式，模型名在URL中，API密钥在查询参数中。
 
+### 🌊 新增：支持流式URL端点替换
+
 ```json
 {
   "method": "POST",
@@ -78,18 +80,24 @@ Gemini使用Google特有的API格式，模型名在URL中，API密钥在查询�
       "description": "API密钥"
     }
   ],
-  "headers": [],
+  "headers": [
+    {
+      "key": "Content-Type",
+      "value": "application/json"
+    }
+  ],
   "bodyFields": [
     {
       "path": "contents",
       "valueType": "dynamic",
-      "description": "Gemini格式的消息数组",
+      "description": "Gemini消息数组",
       "messageTransform": {
         "format": "gemini",
         "customMapping": {
           "roleField": "role",
           "userRoleValue": "user",
-          "assistantRoleValue": "model"
+          "assistantRoleValue": "model",
+          "wrapperField": "parts"
         }
       }
     },
@@ -102,12 +110,38 @@ Gemini使用Google特有的API格式，模型名在URL中，API密钥在查询�
   ],
   "response": {
     "contentPath": "candidates[0].content.parts[0].text",
+    "streamConfig": {
+      "enabled": true,
+      "streamType": "url_endpoint",
+      "urlReplacement": {
+        "from": "generateContent",
+        "to": "streamGenerateContent"
+      },
+      "dataPrefix": "data: ",
+      "contentPath": "candidates[0].content.parts[0].text",
+      "finishCondition": "[DONE]"
+    },
     "errorConfig": {
       "messagePath": "error.message"
     }
   }
 }
 ```
+
+### 🔧 配置说明
+
+**URL模板化**: 
+- 使用 `{model}` 变量在URL中嵌入模型名称
+- 流式请求时自动将 `generateContent` 替换为 `streamGenerateContent`
+
+**流式配置**:
+- `streamType: "url_endpoint"`: 使用URL端点替换方式
+- `urlReplacement`: 定义替换规则
+- **现在支持代理！**: 流式请求现在通过Rust后端进行，完全支持SOCKS5/HTTP代理
+
+**消息格式**: 
+- Gemini需要特殊的消息格式，使用 `parts` 数组包装内容
+- 助手角色使用 `model` 而不是 `assistant`
 
 ## 🧠 Anthropic Claude API配置
 

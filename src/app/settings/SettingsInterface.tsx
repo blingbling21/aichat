@@ -374,22 +374,7 @@ const SettingsInterface: FC = () => {
     }
   };
   
-  // 保存所有设置
-  const handleSaveSettings = () => {
-    // 保存到存储服务
-    storageService.saveProviders(providers);
-    storageService.saveProxySettings(proxySettings);
-    
-    // 如果有正在编辑的提供商，退出编辑模式
-    if (editingProviderId) {
-      setEditingProviderId(null);
-    }
-    
-    logService.info('所有设置已保存');
-    logService.debug(`保存了 ${providers.length} 个AI提供商和代理设置(${proxySettings.enabled ? '启用' : '禁用'})`);
-    
-    toast.success('设置已保存');
-  };
+
   
   // 打开模型管理对话框
   const openModelDialog = (providerId: string) => {
@@ -567,7 +552,7 @@ const SettingsInterface: FC = () => {
   };
 
   return (
-    <div className="container mx-auto p-6 max-w-4xl h-full overflow-y-auto">
+    <div className="container mx-auto p-6 max-w-4xl">
       <h1 className="text-2xl font-bold mb-6">设置</h1>
       
       {/* AI提供商设置 */}
@@ -733,25 +718,50 @@ const SettingsInterface: FC = () => {
                   />
                 </div>
                 
-                <div>
-                  <Label htmlFor="new-provider-key" className="block mb-1">API密钥</Label>
-                  <Input
-                    id="new-provider-key"
-                    type="password"
-                    value={newProvider.apiKey}
-                    onChange={(e) => setNewProvider({ ...newProvider, apiKey: e.target.value })}
-                    placeholder="您的API密钥"
-                  />
-                </div>
-                
+                              <div>
+                <Label htmlFor="new-provider-key" className="block mb-1">API密钥</Label>
+                <Input
+                  id="new-provider-key"
+                  type="password"
+                  value={newProvider.apiKey}
+                  onChange={(e) => setNewProvider({ ...newProvider, apiKey: e.target.value })}
+                  placeholder="您的API密钥"
+                />
+              </div>
+              
+              <div className="space-y-2 mt-4 pt-4 border-t">
                 <Button
                   onClick={handleAddProvider}
-                  className="mt-2 cursor-pointer"
+                  variant="outline"
+                  className="w-full cursor-pointer"
                 >
                   <Plus size={16} className="mr-1" />
                   添加提供商
                 </Button>
+                
+                {/* 保存AI提供商设置按钮 */}
+                <Button
+                  onClick={() => {
+                    // 只保存AI提供商设置
+                    storageService.saveProviders(providers);
+                    
+                    // 如果有正在编辑的提供商，退出编辑模式
+                    if (editingProviderId) {
+                      setEditingProviderId(null);
+                    }
+                    
+                    logService.info('AI提供商设置已保存');
+                    logService.debug(`保存了 ${providers.length} 个AI提供商`);
+                    
+                    toast.success('AI提供商设置已保存');
+                  }}
+                  className="w-full cursor-pointer"
+                >
+                  <Save size={16} className="mr-2" />
+                  保存AI提供商设置
+                </Button>
               </div>
+            </div>
             </CardContent>
           </Card>
         </CardContent>
@@ -854,8 +864,8 @@ const SettingsInterface: FC = () => {
                 </div>
               )}
               
-              {/* 测试代理连接按钮 */}
-              <div className="mt-4 pt-4 border-t">
+              {/* 测试代理连接和保存按钮 */}
+              <div className="mt-4 pt-4 border-t space-y-2">
                 <Button
                   onClick={handleTestProxy}
                   disabled={!proxySettings.enabled || !proxySettings.host || !proxySettings.port || testingProxy}
@@ -871,27 +881,26 @@ const SettingsInterface: FC = () => {
                     '测试代理连接'
                   )}
                 </Button>
-                {proxySettings.type === 'socks5' && (
-                  <div className="text-xs text-blue-600 mt-2">
-                    ✅ 此应用已支持 SOCKS5 代理（通过 Rust 后端实现）
-                  </div>
-                )}
+                
+                {/* 保存代理设置按钮 */}
+                <Button
+                  onClick={() => {
+                    storageService.saveProxySettings(proxySettings);
+                    toast.success('代理设置已保存');
+                    logService.info('代理设置已保存');
+                  }}
+                  className="w-full cursor-pointer"
+                >
+                  <Save size={16} className="mr-2" />
+                  保存代理设置
+                </Button>
               </div>
             </>
           )}
         </CardContent>
       </Card>
       
-      {/* 保存按钮 */}
-      <div className="flex justify-end mb-6">
-        <Button
-          onClick={handleSaveSettings}
-          className="cursor-pointer"
-        >
-          <Save size={16} className="mr-2" />
-          保存设置
-        </Button>
-      </div>
+
       
       {/* 删除确认对话框 */}
       <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>

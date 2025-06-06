@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { ProxySettings } from '../types';
 
 /**
@@ -33,6 +34,28 @@ interface HttpResponse {
   headers: Record<string, string>;
   body: string;
   success: boolean;
+  error?: string;
+}
+
+/**
+ * 流式请求参数接口
+ */
+interface StreamRequestParams {
+  url: string;
+  method: string;
+  headers?: Record<string, string>;
+  body?: string;
+  proxy_config?: ProxyConfig;
+  stream_id: string;
+}
+
+/**
+ * 流式事件接口
+ */
+interface StreamEvent {
+  stream_id: string;
+  event_type: string; // "data", "end", "error"
+  data?: string;
   error?: string;
 }
 
@@ -140,6 +163,71 @@ class HttpService {
    */
   async delete(url: string, options: { headers?: Record<string, string>; proxySettings?: ProxySettings } = {}): Promise<HttpResponse> {
     return this.sendRequest(url, { ...options, method: 'DELETE' });
+  }
+
+  /**
+   * 发送流式HTTP请求
+   */
+  async sendStreamRequest(
+    url: string,
+    options: {
+      method?: string;
+      headers?: Record<string, string>;
+      body?: string;
+      proxySettings?: ProxySettings;
+      onData?: (data: string) => void;
+      onEnd?: () => void;
+      onError?: (error: string) => void;
+    } = {}
+  ): Promise<string> {
+    const streamId = `stream_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    
+    const params: StreamRequestParams = {
+      url,
+      method: options.method || 'GET',
+      headers: options.headers,
+      body: options.body,
+      proxy_config: options.proxySettings ? this.convertProxySettings(options.proxySettings) : undefined,
+      stream_id: streamId,
+    };
+
+    // 监听流式事件
+    const unlisten = await listen<StreamEvent>('stream-event', (event) => {
+      const streamEvent = event.payload;
+      
+      // 只处理当前流的事件
+      if (streamEvent.stream_id !== streamId) {
+        return;
+      }
+
+      switch (streamEvent.event_type) {
+        case 'data':
+          if (streamEvent.data && options.onData) {
+            options.onData(streamEvent.data);
+          }
+          break;
+        case 'end':
+          if (options.onEnd) {
+            options.onEnd();
+          }
+          unlisten(); // 清理监听器
+          break;
+        case 'error':
+          if (streamEvent.error && options.onError) {
+            options.onError(streamEvent.error);
+          }
+          unlisten(); // 清理监听器
+          break;
+      }
+    });
+
+    try {
+      const result = await invoke<string>("send_stream_request", { params });
+      return result;
+    } catch (error) {
+      unlisten(); // 发生错误时清理监听器
+      throw new Error(`流式HTTP请求失败: ${error}`);
+    }
   }
 }
 

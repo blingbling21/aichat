@@ -143,7 +143,8 @@ const JsonNodeEditor: React.FC<JsonNodeEditorProps> = ({
   level,
   isArrayItem = false 
 }) => {
-  const [expanded, setExpanded] = useState(level < 2); // 默认展开前两层
+  const [expanded, setExpanded] = useState(level < 1); // 默认只展开第一层
+  const [showDescription, setShowDescription] = useState(false);
 
   // 更新节点属性
   const updateNode = useCallback((updates: Partial<JsonNode>) => {
@@ -178,25 +179,7 @@ const JsonNodeEditor: React.FC<JsonNodeEditorProps> = ({
     updateNode({ children });
   }, [node.children, updateNode]);
 
-  // 渲染节点类型选择器
-  const renderTypeSelector = () => (
-    <Select
-      value={node.type}
-      onValueChange={(value: JsonNode['type']) => updateNode({ type: value })}
-    >
-      <SelectTrigger className="w-32">
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value="object">对象</SelectItem>
-        <SelectItem value="array">数组</SelectItem>
-        <SelectItem value="string">字符串</SelectItem>
-        <SelectItem value="number">数字</SelectItem>
-        <SelectItem value="boolean">布尔值</SelectItem>
-        <SelectItem value="template">模板变量</SelectItem>
-      </SelectContent>
-    </Select>
-  );
+
 
   // 渲染值编辑器
   const renderValueEditor = () => {
@@ -207,7 +190,7 @@ const JsonNodeEditor: React.FC<JsonNodeEditorProps> = ({
             value={node.templateVariable || ''}
             onValueChange={(value) => updateNode({ templateVariable: value })}
           >
-            <SelectTrigger>
+            <SelectTrigger className="h-5 text-xs border-0 bg-transparent p-1 focus:bg-white focus:border">
               <SelectValue placeholder="选择模板变量" />
             </SelectTrigger>
             <SelectContent>
@@ -226,6 +209,7 @@ const JsonNodeEditor: React.FC<JsonNodeEditorProps> = ({
             value={node.value?.toString() || ''}
             onChange={(e) => updateNode({ value: e.target.value })}
             placeholder="字符串值"
+            className="h-5 text-xs border-0 bg-transparent p-1 focus:bg-white focus:border"
           />
         );
       
@@ -236,6 +220,7 @@ const JsonNodeEditor: React.FC<JsonNodeEditorProps> = ({
             value={node.value?.toString() || ''}
             onChange={(e) => updateNode({ value: parseFloat(e.target.value) || 0 })}
             placeholder="数字值"
+            className="h-5 text-xs border-0 bg-transparent p-1 focus:bg-white focus:border"
           />
         );
       
@@ -245,7 +230,7 @@ const JsonNodeEditor: React.FC<JsonNodeEditorProps> = ({
             value={node.value?.toString() || 'false'}
             onValueChange={(value) => updateNode({ value: value === 'true' })}
           >
-            <SelectTrigger>
+            <SelectTrigger className="h-5 text-xs border-0 bg-transparent p-1 focus:bg-white focus:border">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -253,6 +238,14 @@ const JsonNodeEditor: React.FC<JsonNodeEditorProps> = ({
               <SelectItem value="false">false</SelectItem>
             </SelectContent>
           </Select>
+        );
+      
+      case 'object':
+      case 'array':
+        return (
+          <span className="text-xs text-gray-500 italic">
+            {node.type === 'object' ? '对象容器' : '数组容器'}
+          </span>
         );
       
       default:
@@ -264,81 +257,124 @@ const JsonNodeEditor: React.FC<JsonNodeEditorProps> = ({
   const isArray = node.type === 'array';
 
   return (
-    <Card className={`ml-${level * 4} mb-2`}>
-      <CardHeader className="p-3">
-        <div className="flex items-center gap-2">
-          {(canHaveChildren || isArray) && (
+    <div className={`${level > 0 ? 'ml-3 border-l border-gray-200 pl-2' : ''}`}>
+      {/* 主行 - 表格式布局 */}
+      <div className="flex items-center gap-1 py-1 hover:bg-gray-50 rounded group">
+        {/* 展开/折叠按钮 */}
+        <div className="w-4 flex justify-center">
+          {(canHaveChildren || isArray) ? (
             <Button
               variant="ghost"
               size="sm"
               onClick={() => setExpanded(!expanded)}
-              className="p-1 h-6 w-6"
+              className="p-0 h-4 w-4 opacity-60 group-hover:opacity-100"
             >
-              {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+              {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+            </Button>
+          ) : null}
+        </div>
+        
+        {/* 键名 */}
+        {!isArrayItem && (
+          <div className="w-20">
+            <Input
+              value={node.key || ''}
+              onChange={(e) => updateNode({ key: e.target.value })}
+              placeholder="键名"
+              className="h-5 text-xs border-0 bg-transparent p-1 focus:bg-white focus:border"
+            />
+          </div>
+        )}
+        
+        {/* 类型选择 */}
+        <div className="w-16">
+          <Select
+            value={node.type}
+            onValueChange={(value: JsonNode['type']) => updateNode({ type: value })}
+          >
+            <SelectTrigger className="h-5 text-xs border-0 bg-transparent p-1 focus:bg-white focus:border">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="object">对象</SelectItem>
+              <SelectItem value="array">数组</SelectItem>
+              <SelectItem value="string">字符串</SelectItem>
+              <SelectItem value="number">数字</SelectItem>
+              <SelectItem value="boolean">布尔值</SelectItem>
+              <SelectItem value="template">模板</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        
+        {/* 值编辑器 */}
+        <div className="flex-1 min-w-0">
+          {renderValueEditor()}
+        </div>
+        
+        {/* 操作按钮 */}
+        <div className="flex gap-1 opacity-0 group-hover:opacity-100">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setShowDescription(!showDescription)}
+            className="h-5 w-5 p-0 text-gray-600 hover:text-gray-700"
+            title="编辑描述"
+          >
+            <Settings className="h-3 w-3" />
+          </Button>
+          
+          {canHaveChildren && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={addChild}
+              className="h-5 w-5 p-0 text-green-600 hover:text-green-700"
+              title="添加子节点"
+            >
+              <Plus className="h-3 w-3" />
             </Button>
           )}
           
-          <div className="flex-1 grid grid-cols-12 gap-2 items-center">
-            {!isArrayItem && (
-              <div className="col-span-3">
-                <Input
-                  value={node.key || ''}
-                  onChange={(e) => updateNode({ key: e.target.value })}
-                  placeholder="键名"
-                  className="h-8"
-                />
-              </div>
-            )}
-            
-            <div className={isArrayItem ? "col-span-3" : "col-span-2"}>
-              {renderTypeSelector()}
-            </div>
-            
-            <div className={isArrayItem ? "col-span-6" : "col-span-5"}>
-              {renderValueEditor()}
-            </div>
-            
-            <div className="col-span-2 flex gap-1">
-              {canHaveChildren && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={addChild}
-                  className="h-8 w-8 p-0"
-                >
-                  <Plus className="h-4 w-4" />
-                </Button>
-              )}
-              
-              {onDelete && (
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  onClick={onDelete}
-                  className="h-8 w-8 p-0"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
-              )}
-            </div>
-          </div>
+          {onDelete && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onDelete}
+              className="h-5 w-5 p-0 text-red-600 hover:text-red-700"
+              title="删除节点"
+            >
+              <Trash2 className="h-3 w-3" />
+            </Button>
+          )}
         </div>
-        
-        {/* 描述输入 */}
-        <Input
-          value={node.description || ''}
-          onChange={(e) => updateNode({ description: e.target.value })}
-          placeholder="节点描述"
-          className="h-8 text-sm"
-        />
-      </CardHeader>
+      </div>
       
+      {/* 描述编辑区域 */}
+      {showDescription && (
+        <div className="ml-5 py-1">
+          <Input
+            value={node.description || ''}
+            onChange={(e) => updateNode({ description: e.target.value })}
+            placeholder="节点描述（可选）"
+            className="h-5 text-xs"
+          />
+        </div>
+      )}
+      
+      {/* 描述显示 */}
+      {!showDescription && node.description && (
+        <div className="text-xs text-gray-500 ml-5 mb-1">
+          {node.description}
+        </div>
+      )}
+      
+      {/* 子节点区域 */}
       {expanded && (
-        <CardContent className="p-3 pt-0">
-          {/* 数组项模板编辑 */}
+        <div className="space-y-0">
+          {/* 数组项模板 */}
           {isArray && (
-            <div className="mb-4 p-3 bg-gray-50 rounded">
-              <Label className="text-sm font-medium mb-2 block">数组项模板:</Label>
+            <div className="ml-5 py-1">
+              <div className="text-xs text-gray-600 mb-1">数组项模板:</div>
               <JsonNodeEditor
                 node={node.arrayItemTemplate || {
                   id: `${node.id}-template`,
@@ -362,9 +398,9 @@ const JsonNodeEditor: React.FC<JsonNodeEditorProps> = ({
               level={level + 1}
             />
           ))}
-        </CardContent>
+        </div>
       )}
-    </Card>
+    </div>
   );
 };
 
@@ -376,6 +412,7 @@ export const JsonStructureBuilder: React.FC<JsonStructureBuilderProps> = ({
 }) => {
   const [showPreview, setShowPreview] = useState(false);
   const [previewMode, setPreviewMode] = useState<'template' | 'sample'>('template');
+  const [isExpanded, setIsExpanded] = useState(false);
 
   // 应用预设模板
   const applyPreset = (presetKey: keyof typeof PRESET_TEMPLATES) => {
@@ -458,58 +495,62 @@ export const JsonStructureBuilder: React.FC<JsonStructureBuilderProps> = ({
   }, [generateTemplate]);
 
   return (
-    <div className="space-y-4">
-      {/* 头部控制 */}
-      <div className="flex items-center justify-between">
+    <div className="space-y-2">
+      {/* 主要头部控制 - 紧凑版 */}
+      <div className="flex items-center justify-between p-2 bg-gray-50 rounded">
         <div className="flex items-center gap-2">
           <Checkbox
             checked={config.enabled}
             onCheckedChange={(checked) => onChange({ ...config, enabled: checked === true })}
           />
-          <Label>启用可视化JSON结构配置</Label>
+          <Label className="text-sm">启用可视化JSON结构配置</Label>
+          {config.enabled && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setIsExpanded(!isExpanded)}
+              className="p-1 h-6 w-6 ml-2"
+            >
+              {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+            </Button>
+          )}
         </div>
         
-        <div className="flex gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setShowPreview(!showPreview)}
-          >
-            <Eye className="h-4 w-4 mr-1" />
-            预览
-          </Button>
-        </div>
+        {config.enabled && (
+          <div className="flex gap-1">
+            {/* 快速模板按钮 */}
+            {Object.entries(PRESET_TEMPLATES).map(([key, preset]) => (
+              <Button
+                key={key}
+                variant="outline"
+                size="sm"
+                onClick={() => applyPreset(key as keyof typeof PRESET_TEMPLATES)}
+                className="h-7 px-2 text-xs"
+              >
+                {preset.name}
+              </Button>
+            ))}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowPreview(!showPreview)}
+              className="h-7 px-2"
+            >
+              <Eye className="h-3 w-3 mr-1" />
+              预览
+            </Button>
+          </div>
+        )}
       </div>
 
-      {config.enabled && (
-        <>
-          {/* 预设模板 */}
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm">快速模板</CardTitle>
-            </CardHeader>
-            <CardContent className="flex gap-2">
-              {Object.entries(PRESET_TEMPLATES).map(([key, preset]) => (
-                <Button
-                  key={key}
-                  variant="outline"
-                  size="sm"
-                  onClick={() => applyPreset(key as keyof typeof PRESET_TEMPLATES)}
-                >
-                  {preset.name}
-                </Button>
-              ))}
-            </CardContent>
-          </Card>
-
-          {/* 角色映射配置 */}
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm">角色映射</CardTitle>
-            </CardHeader>
-            <CardContent className="grid grid-cols-3 gap-4">
+      {config.enabled && isExpanded && (
+        <div className="space-y-2 pl-3 border-l border-gray-200">
+          {/* 角色映射配置 - 极简版 */}
+          <div className="bg-gray-50 p-2 rounded">
+            <div className="text-xs text-gray-600 mb-2">角色映射</div>
+            <div className="grid grid-cols-3 gap-2">
               <div>
-                <Label>用户角色值</Label>
+                <Label className="text-xs text-gray-600">用户</Label>
                 <Input
                   value={config.roleMapping.user}
                   onChange={(e) => onChange({
@@ -517,10 +558,11 @@ export const JsonStructureBuilder: React.FC<JsonStructureBuilderProps> = ({
                     roleMapping: { ...config.roleMapping, user: e.target.value }
                   })}
                   placeholder="user"
+                  className="h-6 text-xs"
                 />
               </div>
               <div>
-                <Label>助手角色值</Label>
+                <Label className="text-xs text-gray-600">助手</Label>
                 <Input
                   value={config.roleMapping.assistant}
                   onChange={(e) => onChange({
@@ -528,10 +570,11 @@ export const JsonStructureBuilder: React.FC<JsonStructureBuilderProps> = ({
                     roleMapping: { ...config.roleMapping, assistant: e.target.value }
                   })}
                   placeholder="assistant"
+                  className="h-6 text-xs"
                 />
               </div>
               <div>
-                <Label>系统角色值</Label>
+                <Label className="text-xs text-gray-600">系统</Label>
                 <Input
                   value={config.roleMapping.system}
                   onChange={(e) => onChange({
@@ -539,54 +582,56 @@ export const JsonStructureBuilder: React.FC<JsonStructureBuilderProps> = ({
                     roleMapping: { ...config.roleMapping, system: e.target.value }
                   })}
                   placeholder="system"
+                  className="h-6 text-xs"
                 />
               </div>
-            </CardContent>
-          </Card>
+            </div>
+          </div>
 
-          {/* JSON结构编辑器 */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-sm">
-                字段结构: {fieldPath}
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
+          {/* JSON结构编辑器 - 表格式 */}
+          <div className="bg-white border border-gray-200 rounded">
+            <div className="text-xs text-gray-600 p-2 border-b bg-gray-50 flex items-center justify-between">
+              <span>字段结构: {fieldPath}</span>
+              <div className="text-xs text-gray-500">键名 | 类型 | 值</div>
+            </div>
+            <div className="p-2">
               <JsonNodeEditor
                 node={config.rootNode}
                 onChange={(updatedNode) => onChange({ ...config, rootNode: updatedNode })}
                 level={0}
               />
-            </CardContent>
-          </Card>
+            </div>
+          </div>
 
-          {/* 预览区域 */}
+          {/* 预览区域 - 紧凑版 */}
           {showPreview && (
-            <Card>
-              <CardHeader className="pb-3">
+            <Card className="shadow-sm">
+              <CardHeader className="pb-2 pt-2">
                 <div className="flex items-center justify-between">
-                  <CardTitle className="text-sm">预览</CardTitle>
-                  <div className="flex gap-2">
+                  <CardTitle className="text-xs text-gray-600">预览</CardTitle>
+                  <div className="flex gap-1">
                     <Button
                       variant={previewMode === 'template' ? 'default' : 'outline'}
                       size="sm"
                       onClick={() => setPreviewMode('template')}
+                      className="h-6 px-2 text-xs"
                     >
-                      <Code className="h-4 w-4 mr-1" />
+                      <Code className="h-3 w-3 mr-1" />
                       模板
                     </Button>
                     <Button
                       variant={previewMode === 'sample' ? 'default' : 'outline'}
                       size="sm"
                       onClick={() => setPreviewMode('sample')}
+                      className="h-6 px-2 text-xs"
                     >
-                      <Settings className="h-4 w-4 mr-1" />
+                      <Settings className="h-3 w-3 mr-1" />
                       示例
                     </Button>
                   </div>
                 </div>
               </CardHeader>
-              <CardContent>
+              <CardContent className="pt-0 pb-2">
                 <Textarea
                   value={JSON.stringify(
                     previewMode === 'template' 
@@ -596,13 +641,13 @@ export const JsonStructureBuilder: React.FC<JsonStructureBuilderProps> = ({
                     2
                   )}
                   readOnly
-                  rows={12}
-                  className="font-mono text-sm"
+                  rows={8}
+                  className="font-mono text-xs"
                 />
               </CardContent>
             </Card>
           )}
-        </>
+        </div>
       )}
     </div>
   );

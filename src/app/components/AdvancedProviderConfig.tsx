@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog,
   DialogContent,
@@ -21,8 +22,9 @@ import {
 } from "@/components/ui/select";
 import { Plus, Trash2, ChevronDown, HelpCircle, Info } from 'lucide-react';
 import { toast } from 'sonner';
-import { AIProvider, CustomAPIConfig, APIHeaderConfig, APIBodyFieldConfig, MessageStructureConfig } from '../types';
+import { AIProvider, CustomAPIConfig, APIHeaderConfig, APIBodyFieldConfig, MessageStructureConfig, APIQueryParamConfig } from '../types';
 import { JsonStructureBuilder } from './JsonStructureBuilder';
+
 
 interface AdvancedProviderConfigProps {
   open: boolean;
@@ -90,15 +92,24 @@ const AdvancedProviderConfig: React.FC<AdvancedProviderConfigProps> = ({
     contentType: 'application/json',
     headers: [],
     bodyFields: [],
-    response: {
-      contentPath: '',
-      streamConfig: {
-        enabled: false,
+    streamConfig: {
+      enabled: false,
+      requestType: 'body_field',
+      request: {
+        urlReplacement: {
+          from: 'generateContent',
+          to: 'streamGenerateContent'
+        }
+      },
+      response: {
+        format: 'sse',
         dataPrefix: 'data: ',
         contentPath: '',
-        reasoningPath: '',
         finishCondition: '[DONE]'
       }
+    },
+    response: {
+      contentPath: ''
     }
   }); // 默认配置，不为null
 
@@ -113,15 +124,19 @@ const AdvancedProviderConfig: React.FC<AdvancedProviderConfigProps> = ({
           contentType: 'application/json',
           headers: [],
           bodyFields: [],
-          response: {
-            contentPath: '',
-            streamConfig: {
-              enabled: false,
+          streamConfig: {
+            enabled: false,
+            requestType: 'body_field',
+            request: {},
+            response: {
+              format: 'sse',
               dataPrefix: 'data: ',
               contentPath: '',
-              reasoningPath: '',
               finishCondition: '[DONE]'
             }
+          },
+          response: {
+            contentPath: ''
           }
         });
       }
@@ -414,8 +429,8 @@ const AdvancedProviderConfig: React.FC<AdvancedProviderConfigProps> = ({
                         <div>
                           <Label>静态值</Label>
                           <Input
-                            value={field.value?.toString() || ''}
-                            onChange={(e) => updateBodyField(index, 'value', e.target.value)}
+                                                    value={field.value?.toString() ?? ''}
+                        onChange={(e) => updateBodyField(index, 'value', e.target.value)}
                             placeholder="如: 0.7, true, gpt-4"
                           />
                         </div>
@@ -424,8 +439,8 @@ const AdvancedProviderConfig: React.FC<AdvancedProviderConfigProps> = ({
                         <div>
                           <Label>模板值</Label>
                           <Input
-                            value={field.valueTemplate || ''}
-                            onChange={(e) => updateBodyField(index, 'valueTemplate', e.target.value)}
+                                                    value={field.valueTemplate ?? ''}
+                        onChange={(e) => updateBodyField(index, 'valueTemplate', e.target.value)}
                             placeholder="如: {model}, {stream}, {message}"
                           />
                         </div>
@@ -433,8 +448,8 @@ const AdvancedProviderConfig: React.FC<AdvancedProviderConfigProps> = ({
                       <div>
                         <Label>字段说明</Label>
                         <Input
-                          value={field.description || ''}
-                          onChange={(e) => updateBodyField(index, 'description', e.target.value)}
+                                                  value={field.description ?? ''}
+                        onChange={(e) => updateBodyField(index, 'description', e.target.value)}
                           placeholder="说明这个字段的作用"
                         />
                       </div>
@@ -474,141 +489,396 @@ const AdvancedProviderConfig: React.FC<AdvancedProviderConfigProps> = ({
             </div>
           </Collapsible>
 
-          {/* 响应解析配置 */}
-          <Collapsible title="响应解析配置">
-            <div className="space-y-4">
-              <div>
-                <Label htmlFor="content-path">内容提取路径</Label>
-                <Input
-                  id="content-path"
-                  value={config.response.contentPath}
-                  onChange={(e) => setConfig({
+          {/* 流式请求配置 - 独立配置区域 */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg">流式请求配置</CardTitle>
+              <CardDescription>
+                配置如何发送和解析流式API请求
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-center space-x-2">
+                <Checkbox
+                  id="stream-enabled"
+                  checked={config.streamConfig?.enabled || false}
+                  onCheckedChange={(checked) => setConfig({
                     ...config,
-                    response: { ...config.response, contentPath: e.target.value }
+                    streamConfig: {
+                      enabled: checked === true,
+                      requestType: config.streamConfig?.requestType || 'body_field',
+                      request: config.streamConfig?.request || {},
+                      response: {
+                        dataPrefix: config.streamConfig?.response?.dataPrefix || 'data: ',
+                        contentPath: config.streamConfig?.response?.contentPath || '',
+                        finishCondition: config.streamConfig?.response?.finishCondition || '[DONE]'
+                      }
+                    }
                   })}
-                  placeholder="如: choices[0].message.content, completion"
                 />
-              </div>
-              
-              <div>
-                <Label htmlFor="reasoning-path">推理内容路径 (可选)</Label>
-                <Input
-                  id="reasoning-path"
-                  value={config.response.reasoningPath || ''}
-                  onChange={(e) => setConfig({
-                    ...config,
-                    response: { ...config.response, reasoningPath: e.target.value }
-                  })}
-                  placeholder="如: choices[0].message.reasoning_content"
-                />
-                <p className="text-xs text-gray-500 mt-1">
-                  用于提取推理过程内容，支持非流式和流式响应
-                </p>
+                <Label htmlFor="stream-enabled">启用流式响应</Label>
               </div>
 
-              {/* 流式响应配置 */}
-              <div className="space-y-3">
-                <div className="flex items-center space-x-2">
-                  <Checkbox
-                    id="stream-enabled"
-                    checked={config.response.streamConfig?.enabled || false}
-                    onCheckedChange={(checked) => setConfig({
-                      ...config,
-                      response: {
-                        ...config.response,
-                        streamConfig: {
-                          ...config.response.streamConfig,
-                          enabled: checked === true,
-                          dataPrefix: config.response.streamConfig?.dataPrefix || 'data: ',
-                          contentPath: config.response.streamConfig?.contentPath || '',
-                          reasoningPath: config.response.streamConfig?.reasoningPath || '',
-                          finishCondition: config.response.streamConfig?.finishCondition || '[DONE]'
+              {config.streamConfig?.enabled && (
+                <div className="space-y-4 p-4 border rounded-lg bg-gray-50">
+                  {/* 请求方式选择 */}
+                  <div>
+                    <Label className="text-sm font-medium">流式请求方式</Label>
+                    <Select
+                      value={config.streamConfig?.requestType || 'body_field'}
+                      onValueChange={(value: 'body_field' | 'url_endpoint' | 'query_param') => setConfig({
+                        ...config,
+                        streamConfig: config.streamConfig ? {
+                          ...config.streamConfig,
+                          requestType: value,
+                          request: {
+                            ...config.streamConfig.request,
+                            // 根据requestType初始化对应字段
+                            ...(value === 'url_endpoint' && !config.streamConfig.request?.urlReplacement ? {
+                              urlReplacement: { from: 'generateContent', to: 'streamGenerateContent' }
+                            } : {}),
+                            ...(value === 'body_field' && !config.streamConfig.request?.bodyFieldPath ? {
+                              bodyFieldPath: 'stream', bodyFieldValue: true
+                            } : {}),
+                            ...(value === 'query_param' && !config.streamConfig.request?.queryParamKey ? {
+                              queryParamKey: 'stream', queryParamValue: 'true'
+                            } : {})
+                          }
+                        } : {
+                          enabled: true,
+                          requestType: value,
+                          request: value === 'url_endpoint' ? {
+                            urlReplacement: { from: 'generateContent', to: 'streamGenerateContent' }
+                          } : value === 'body_field' ? {
+                            bodyFieldPath: 'stream', bodyFieldValue: true
+                          } : {
+                            queryParamKey: 'stream', queryParamValue: 'true'
+                          },
+                          response: { format: 'sse', dataPrefix: 'data: ', contentPath: '', finishCondition: '[DONE]' }
                         }
-                      }
-                    })}
-                  />
-                  <Label htmlFor="stream-enabled">支持流式响应</Label>
-                </div>
-                
-                {config.response.streamConfig?.enabled && (
+                      })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="body_field">请求体字段控制 (如OpenAI: stream: true)</SelectItem>
+                        <SelectItem value="url_endpoint">URL端点替换 (如Gemini: generateContent→streamGenerateContent)</SelectItem>
+                        <SelectItem value="query_param">查询参数控制 (如?stream=true)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {/* 请求配置 */}
                   <div className="space-y-3">
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <Label>数据前缀</Label>
-                        <Input
-                          value={config.response.streamConfig.dataPrefix || ''}
-                          onChange={(e) => setConfig({
-                            ...config,
-                            response: {
-                              ...config.response,
+                    <h4 className="font-medium text-sm">请求配置</h4>
+                    
+                    {config.streamConfig?.requestType === 'body_field' && (
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <Label className="text-xs">字段路径</Label>
+                          <Input
+                            value={config.streamConfig?.request?.bodyFieldPath ?? ''}
+                            onChange={(e) => setConfig({
+                              ...config,
                               streamConfig: {
-                                ...config.response.streamConfig!,
-                                dataPrefix: e.target.value
+                                ...config.streamConfig!,
+                                request: {
+                                  ...config.streamConfig.request,
+                                  bodyFieldPath: e.target.value
+                                }
                               }
-                            }
-                          })}
-                          placeholder="data: "
-                        />
+                            })}
+                            placeholder="stream"
+                            className="h-8 text-xs"
+                          />
+                        </div>
+                        <div>
+                          <Label className="text-xs">字段值</Label>
+                          <Input
+                            value={String(config.streamConfig?.request?.bodyFieldValue ?? '')}
+                            onChange={(e) => setConfig({
+                              ...config,
+                              streamConfig: {
+                                ...config.streamConfig!,
+                                request: {
+                                  ...config.streamConfig.request,
+                                  bodyFieldValue: e.target.value === 'true' ? true : e.target.value === 'false' ? false : e.target.value
+                                }
+                              }
+                            })}
+                            placeholder="true"
+                            className="h-8 text-xs"
+                          />
+                        </div>
                       </div>
+                    )}
+                    
+                    {config.streamConfig?.requestType === 'url_endpoint' && (
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <Label className="text-xs">替换源</Label>
+                          <Input
+                            value={config.streamConfig?.request?.urlReplacement?.from ?? ''}
+                            onChange={(e) => setConfig({
+                              ...config,
+                              streamConfig: {
+                                ...config.streamConfig!,
+                                request: {
+                                  ...config.streamConfig.request,
+                                  urlReplacement: {
+                                    from: e.target.value,
+                                    to: config.streamConfig?.request?.urlReplacement?.to ?? ''
+                                  }
+                                }
+                              }
+                            })}
+                            placeholder="generateContent"
+                            className="h-8 text-xs"
+                          />
+                        </div>
+                        <div>
+                          <Label className="text-xs">替换为</Label>
+                          <Input
+                            value={config.streamConfig?.request?.urlReplacement?.to ?? ''}
+                            onChange={(e) => setConfig({
+                              ...config,
+                              streamConfig: {
+                                ...config.streamConfig!,
+                                request: {
+                                  ...config.streamConfig.request,
+                                  urlReplacement: {
+                                    from: config.streamConfig?.request?.urlReplacement?.from ?? '',
+                                    to: e.target.value
+                                  }
+                                }
+                              }
+                            })}
+                            placeholder="streamGenerateContent"
+                            className="h-8 text-xs"
+                          />
+                        </div>
+                      </div>
+                    )}
+                    
+                    {config.streamConfig?.requestType === 'query_param' && (
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <Label className="text-xs">参数名</Label>
+                          <Input
+                            value={config.streamConfig?.request?.queryParamKey ?? ''}
+                            onChange={(e) => setConfig({
+                              ...config,
+                              streamConfig: {
+                                ...config.streamConfig!,
+                                request: {
+                                  ...config.streamConfig.request,
+                                  queryParamKey: e.target.value
+                                }
+                              }
+                            })}
+                            placeholder="stream"
+                            className="h-8 text-xs"
+                          />
+                        </div>
+                        <div>
+                          <Label className="text-xs">参数值</Label>
+                          <Input
+                            value={config.streamConfig?.request?.queryParamValue ?? ''}
+                            onChange={(e) => setConfig({
+                              ...config,
+                              streamConfig: {
+                                ...config.streamConfig!,
+                                request: {
+                                  ...config.streamConfig.request,
+                                  queryParamValue: e.target.value
+                                }
+                              }
+                            })}
+                            placeholder="true"
+                            className="h-8 text-xs"
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* 响应配置 */}
+                  <div className="space-y-3">
+                    <h4 className="font-medium text-sm">响应解析配置</h4>
+                    
+                    <div>
+                      <Label className="text-xs">响应格式</Label>
+                      <Select
+                        value={config.streamConfig?.response?.format ?? 'sse'}
+                        onValueChange={(value: 'sse' | 'json') => setConfig({
+                          ...config,
+                          streamConfig: {
+                            ...config.streamConfig!,
+                            response: {
+                              ...config.streamConfig.response!,
+                              format: value
+                            }
+                          }
+                        })}
+                      >
+                        <SelectTrigger className="h-8 text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="sse">SSE格式 (如OpenAI: data: {`{...}`})</SelectItem>
+                          <SelectItem value="json">JSON数组格式 (如Gemini: [{`{...}, {...}`}])</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    
+                    <div className="grid grid-cols-2 gap-2">
+                      {(config.streamConfig?.response?.format === 'sse' || !config.streamConfig?.response?.format) && (
+                        <div>
+                          <Label className="text-xs">数据前缀</Label>
+                          <Input
+                            value={config.streamConfig?.response?.dataPrefix ?? ''}
+                            onChange={(e) => setConfig({
+                              ...config,
+                              streamConfig: {
+                                ...config.streamConfig!,
+                                response: {
+                                  ...config.streamConfig.response!,
+                                  dataPrefix: e.target.value
+                                }
+                              }
+                            })}
+                            placeholder="data: "
+                            className="h-8 text-xs"
+                          />
+                        </div>
+                      )}
                       <div>
-                        <Label>结束条件</Label>
+                        <Label className="text-xs">结束条件</Label>
                         <Input
-                          value={config.response.streamConfig.finishCondition || ''}
+                          value={config.streamConfig?.response?.finishCondition ?? ''}
                           onChange={(e) => setConfig({
                             ...config,
-                            response: {
-                              ...config.response,
-                              streamConfig: {
-                                ...config.response.streamConfig!,
+                            streamConfig: {
+                              ...config.streamConfig!,
+                              response: {
+                                ...config.streamConfig.response!,
                                 finishCondition: e.target.value
                               }
                             }
                           })}
                           placeholder="[DONE]"
+                          className="h-8 text-xs"
                         />
                       </div>
                     </div>
+                    
                     <div>
-                      <Label>流式内容路径</Label>
+                      <Label className="text-xs">流式内容路径 *</Label>
                       <Input
-                        value={config.response.streamConfig.contentPath}
+                        value={config.streamConfig?.response?.contentPath ?? ''}
                         onChange={(e) => setConfig({
                           ...config,
-                          response: {
-                            ...config.response,
-                            streamConfig: {
-                              ...config.response.streamConfig!,
+                          streamConfig: {
+                            ...config.streamConfig!,
+                            response: {
+                              ...config.streamConfig.response!,
                               contentPath: e.target.value
                             }
                           }
                         })}
                         placeholder="choices[0].delta.content"
-                        className="w-full"
+                        className="h-8 text-xs"
                       />
                     </div>
+                    
                     <div>
-                      <Label>推理内容路径 (可选)</Label>
+                      <Label className="text-xs">流式推理内容路径（可选）</Label>
                       <Input
-                        value={config.response.streamConfig.reasoningPath || ''}
+                        value={config.streamConfig?.response?.reasoningPath ?? ''}
                         onChange={(e) => setConfig({
                           ...config,
-                          response: {
-                            ...config.response,
-                            streamConfig: {
-                              ...config.response.streamConfig!,
+                          streamConfig: {
+                            ...config.streamConfig!,
+                            response: {
+                              ...config.streamConfig.response!,
                               reasoningPath: e.target.value
                             }
                           }
                         })}
                         placeholder="choices[0].delta.reasoning_content"
-                        className="w-full"
+                        className="h-8 text-xs"
                       />
                     </div>
                   </div>
-                )}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* 响应解析配置 */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg">响应解析配置</CardTitle>
+              <CardDescription>
+                配置如何从API响应中提取内容和错误信息
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div>
+                <Label htmlFor="content-path">内容提取路径 *</Label>
+                <Input
+                  id="content-path"
+                  value={config.response.contentPath}
+                  onChange={(e) => setConfig({
+                    ...config,
+                    response: {
+                      ...config.response,
+                      contentPath: e.target.value
+                    }
+                  })}
+                  placeholder="choices[0].message.content"
+                />
               </div>
-            </div>
-          </Collapsible>
+
+              <div>
+                <Label htmlFor="reasoning-path">推理内容路径（可选）</Label>
+                <Input
+                  id="reasoning-path"
+                  value={config.response.reasoningPath ?? ''}
+                  onChange={(e) => setConfig({
+                    ...config,
+                    response: {
+                      ...config.response,
+                      reasoningPath: e.target.value
+                    }
+                  })}
+                  placeholder="choices[0].message.reasoning_content"
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  用于提取推理过程内容，支持推理模式的AI使用
+                </p>
+              </div>
+
+              <div>
+                <Label htmlFor="error-path">错误信息路径（可选）</Label>
+                <Input
+                  id="error-path"
+                  value={config.response.errorConfig?.messagePath ?? ''}
+                  onChange={(e) => setConfig({
+                    ...config,
+                    response: {
+                      ...config.response,
+                      errorConfig: {
+                        messagePath: e.target.value
+                      }
+                    }
+                  })}
+                  placeholder="error.message"
+                />
+              </div>
+            </CardContent>
+          </Card>
 
           {/* 模板变量说明 */}
           <Collapsible title="可用模板变量">

@@ -1,6 +1,7 @@
 import { AIProvider, Message, ProxySettings, Agent, SceneParticipant, SceneMessage, Scene, CustomAPIConfig, APIBodyFieldConfig, APIResponseConfig, MessageStructureConfig, JsonNode } from '../types';
 import { storageService } from './storage';
 import { logService } from './log';
+import { httpService } from './http';
 
 /**
  * AI响应结果类型
@@ -263,13 +264,22 @@ class AIService {
     }
     
     // 构建URL - 支持模板化
-    let finalUrl = provider.apiEndpoint;
-    if (config.urlTemplate) {
-      finalUrl = String(this.processTemplate(config.urlTemplate, {
-        apiKey: provider.apiKey,
-        model: modelId,
-        endpoint: provider.apiEndpoint
-      }));
+    // 优先使用高级配置的urlTemplate，否则使用基本设置的apiEndpoint
+    const urlToProcess = config.urlTemplate || provider.apiEndpoint;
+    let finalUrl = String(this.processTemplate(urlToProcess, {
+      apiKey: provider.apiKey,
+      model: modelId,
+      endpoint: provider.apiEndpoint
+    }));
+    
+    // 处理流式请求的URL替换（如Gemini API）
+    if (isStream && config.streamConfig?.enabled && 
+        config.streamConfig.requestType === 'url_endpoint' &&
+        config.streamConfig.request.urlReplacement) {
+      const { from, to } = config.streamConfig.request.urlReplacement;
+      finalUrl = finalUrl.replace(from, to);
+      logService.info(`🌊 流式URL替换: ${from} → ${to}`);
+      logService.info(`🌊 最终URL: ${finalUrl}`);
     }
     
     // 添加查询参数
@@ -292,6 +302,19 @@ class AIService {
         }
       }
       finalUrl = url.toString();
+    }
+    
+    // 添加流式查询参数（如果配置了通过查询参数控制流式）
+    if (isStream && config.streamConfig?.enabled && 
+        config.streamConfig.requestType === 'query_param' &&
+        config.streamConfig.request.queryParamKey) {
+      const url = new URL(finalUrl);
+      url.searchParams.set(
+        config.streamConfig.request.queryParamKey, 
+        config.streamConfig.request.queryParamValue || 'true'
+      );
+      finalUrl = url.toString();
+      logService.info(`🌊 添加流式查询参数: ${config.streamConfig.request.queryParamKey}=${config.streamConfig.request.queryParamValue || 'true'}`);
     }
     
     const options: RequestInit = {
@@ -349,6 +372,15 @@ class AIService {
           } else {
           logService.error(`✗ 字段 ${fieldConfig.path} 值为空`);
         }
+      }
+      
+      // 处理流式请求的请求体字段（如OpenAI API的stream: true）
+      if (isStream && config.streamConfig?.enabled && 
+          config.streamConfig.requestType === 'body_field' &&
+          config.streamConfig.request.bodyFieldPath) {
+        const streamValue = config.streamConfig.request.bodyFieldValue ?? true;
+        this.setNestedValue(body, config.streamConfig.request.bodyFieldPath, streamValue);
+        logService.info(`🌊 添加流式请求体字段: ${config.streamConfig.request.bodyFieldPath}=${streamValue}`);
       }
       
       logService.info(`请求体字段: ${Object.keys(body).join(', ')}`);
@@ -472,11 +504,16 @@ class AIService {
       case 'dynamic':
         // 处理动态值，如构建消息数组
         if (fieldConfig.path === 'messages' || fieldConfig.path === 'contents') {
-          logService.debug(`开始构建动态${fieldConfig.path}字段`);
+          logService.info(`🏗️ 开始构建动态${fieldConfig.path}字段`);
+          logService.info(`🎯 fieldConfig.path: ${fieldConfig.path}`);
+          logService.info(`📋 fieldConfig.messageTransform: ${JSON.stringify(fieldConfig.messageTransform)}`);
           
           // 根据消息转换配置决定格式
           const transform = fieldConfig.messageTransform;
-          return this.buildMessagesArray(context, transform);
+          const result = this.buildMessagesArray(context, transform);
+          
+          logService.info(`✅ ${fieldConfig.path}字段构建完成，返回 ${Array.isArray(result) ? result.length : 'unknown'} 条消息`);
+          return result;
         }
         
         // Claude格式的系统消息单独字段处理
@@ -514,6 +551,18 @@ class AIService {
       };
     }
   ): unknown[] {
+    // ========== 调试日志：打印所有输入参数 ==========
+    logService.info('🔍 buildMessagesArray 调试开始');
+    logService.info(`📝 context.message: "${context.message}"`);
+    logService.info(`📚 context.history 长度: ${context.history?.length || 0}`);
+    if (context.history && context.history.length > 0) {
+      context.history.forEach((msg, index) => {
+        logService.info(`  history[${index}] ${msg.role}: "${msg.content}"`);
+      });
+    }
+    logService.info(`🔧 context.systemPrompt: ${context.systemPrompt ? '"' + context.systemPrompt.substring(0, 50) + '..."' : 'null'}`);
+    logService.info(`📋 transform.format: ${transform?.format || 'openai'}`);
+    
     const format = transform?.format || 'openai';
     const mapping = transform?.customMapping || {};
     
@@ -542,13 +591,29 @@ class AIService {
         };
         messages.push(message);
       }
-      logService.debug('添加了系统提示词消息');
+      logService.info('➕ 添加了系统提示词消息');
     }
     
     // 处理历史消息和当前消息
-    const allMessages = context.history ? [...context.history] : [
-      { role: 'user' as const, content: context.message }
-    ];
+    let allMessages: { role: 'user' | 'assistant'; content: string }[] = [];
+    
+    if (context.history && context.history.length > 0) {
+      // 如果有历史记录，直接使用（前端已经构建了完整的对话历史）
+      allMessages = [...context.history];
+      logService.info(`📋 使用前端提供的完整历史记录，包含 ${allMessages.length} 条消息`);
+    } else {
+      // 如果没有历史记录，只添加当前消息
+      if (context.message && context.message.trim()) {
+        allMessages.push({ role: 'user' as const, content: context.message });
+        logService.info('➕ 没有历史记录，添加当前用户消息');
+      }
+    }
+    
+    // ========== 调试日志：打印allMessages内容 ==========
+    logService.info(`🔍 allMessages 最终内容（${allMessages.length} 条）:`);
+    allMessages.forEach((msg, index) => {
+      logService.info(`  allMessages[${index}] ${msg.role}: "${msg.content}"`);
+    });
     
     for (const msg of allMessages) {
       if (format === 'gemini') {
@@ -556,10 +621,13 @@ class AIService {
         const role = msg.role === 'user' ? userRole : 
                     msg.role === 'assistant' ? 'model' : msg.role; // Gemini使用model而不是assistant
         
-        messages.push({
+        const geminiMessage = {
           [roleField]: role,
           parts: [{ text: msg.content }]
-        });
+        };
+        
+        messages.push(geminiMessage);
+        logService.info(`🔄 转换为Gemini格式: ${JSON.stringify(geminiMessage)}`);
       } else {
         // OpenAI/Claude格式
         const role = msg.role === 'user' ? userRole : 
@@ -576,15 +644,18 @@ class AIService {
         }
         
         messages.push(message);
+        logService.info(`🔄 转换为${format}格式: ${JSON.stringify(message)}`);
       }
     }
     
-    logService.debug(`构建了${format}格式的消息数组，包含 ${messages.length} 条消息`);
-    logService.info('=== 发送给AI的完整消息历史 ===');
+    // ========== 调试日志：打印最终消息数组 ==========
+    logService.info(`🏁 构建了${format}格式的消息数组，包含 ${messages.length} 条消息`);
+    logService.info('=== 🚀 发送给AI的完整消息历史 ===');
     messages.forEach((msg, index) => {
-      logService.info(`消息[${index}] ${JSON.stringify(msg)}`);
+      logService.info(`✉️ 消息[${index}] ${JSON.stringify(msg)}`);
     });
-    logService.info('=== 消息历史结束 ===');
+    logService.info('=== 📤 消息历史结束 ===');
+    logService.info('🔍 buildMessagesArray 调试结束');
     
     return messages;
   }
@@ -682,16 +753,21 @@ class AIService {
     logService.debug(`请求URL: ${url}`);
     logService.debug(`请求选项: ${JSON.stringify(options, null, 2)}`);
 
-    const response = await fetch(url, options);
+    // 使用HTTP服务发送请求（支持代理）
+    const httpResponse = await httpService.sendRequest(url, {
+      method: (options.method as string) || 'POST',
+      headers: options.headers as Record<string, string>,
+      body: options.body as string,
+      proxySettings: proxySettings.enabled ? proxySettings : undefined
+    });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      let errorMessage = `API错误: ${response.status} - ${errorText}`;
+    if (!httpResponse.success) {
+      let errorMessage = `API错误: ${httpResponse.status} - ${httpResponse.body}`;
       
       // 尝试使用自定义错误解析
       if (provider.customConfig.response.errorConfig?.messagePath) {
         try {
-          const errorData = JSON.parse(errorText);
+          const errorData = JSON.parse(httpResponse.body);
           const customError = this.getNestedValue(errorData, provider.customConfig.response.errorConfig.messagePath);
           if (customError) {
             errorMessage = `API错误: ${customError}`;
@@ -704,7 +780,7 @@ class AIService {
       throw new Error(errorMessage);
     }
 
-    const data = await response.json();
+    const data = JSON.parse(httpResponse.body);
     logService.info(`收到非流式响应: ${JSON.stringify(data)}`);
     
     const extractedContent = this.extractResponseContent(data, provider.customConfig.response);
@@ -889,12 +965,21 @@ class AIService {
       
       logService.info(`测试连接 ${provider.name}，使用模型: ${testModelId}`);
       
-      // 发送测试请求
-      const response = await this.callAI(testMessage, provider, proxySettings, undefined, testModelId, false);
+      // 发送测试请求，使用callAIWithReasoning获取完整响应
+      const response = await this.callAIWithReasoning(testMessage, provider, proxySettings, undefined, testModelId, false);
+      
+      // 构建测试成功消息
+      let successMessage = `连接成功！收到回复: "${response.content.substring(0, 50)}${response.content.length > 50 ? '...' : ''}"`;
+      
+      // 如果有推理内容，也显示出来
+      if (response.reasoningContent) {
+        const reasoningPreview = response.reasoningContent.substring(0, 30);
+        successMessage += `\n推理内容: "${reasoningPreview}${response.reasoningContent.length > 30 ? '...' : ''}"`;
+      }
       
       return {
         success: true,
-        message: `连接成功！收到回复: "${response.substring(0, 50)}${response.length > 50 ? '...' : ''}"`
+        message: successMessage
       };
     } catch (error) {
       logService.error('测试连接失败:', error);
@@ -1385,99 +1470,151 @@ class AIService {
     logService.debug(`请求URL: ${url}`);
     logService.debug(`请求选项: ${JSON.stringify(options, null, 2)}`);
 
-    const response = await fetch(url, options);
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      let errorMessage = `API错误: ${response.status} - ${errorText}`;
-      
-      // 尝试使用自定义错误解析
-      if (provider.customConfig.response.errorConfig?.messagePath) {
-        try {
-          const errorData = JSON.parse(errorText);
-          const customError = this.getNestedValue(errorData, provider.customConfig.response.errorConfig.messagePath);
-          if (customError) {
-            errorMessage = `API错误: ${customError}`;
-          }
-        } catch {
-          // 忽略解析错误，使用默认错误信息
-        }
-      }
-      
-      throw new Error(errorMessage);
-    }
-
-    // 检查是否支持流式响应
-    if (!provider.customConfig.response.streamConfig?.enabled) {
-      // 如果不支持流式，直接返回完整响应
-      const data = await response.json();
-      const content = this.extractResponseContent(data, provider.customConfig.response);
-      onUpdate(content, true, false);
-      return;
-    }
-
-    // 处理流式响应
-    if (!response.body) {
-      throw new Error('响应不包含数据流');
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder('utf-8');
+    // 现在支持代理的流式请求！
+    logService.info('🌊 使用Rust后端进行流式请求，支持代理');
+    logService.info(`🔧 最终请求URL: ${url}`);
+    logService.info(`🔧 请求头: ${JSON.stringify(options.headers, null, 2)}`);
+    logService.info(`🔧 请求体: ${options.body}`);
     
+    // 检查流式配置
+    if (!provider.customConfig.streamConfig?.enabled) {
+      throw new Error('流式配置未启用');
+    }
+
+    logService.info(`🔧 流式配置: ${JSON.stringify(provider.customConfig.streamConfig, null, 2)}`);
+
+    // 初始化变量用于累积响应
     let fullResponse = '';
     let reasoningFullResponse = '';
-    const streamConfig = provider.customConfig.response.streamConfig;
+    const streamConfig = provider.customConfig.streamConfig?.response;
 
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+    // ===== 🔧 调试日志：检查流式配置 =====
+    logService.info(`🔧 streamConfig 对象: ${JSON.stringify(streamConfig, null, 2)}`);
+    logService.info(`🔧 streamConfig?.format: "${streamConfig?.format}"`);
+    logService.info(`🔧 format类型: ${typeof streamConfig?.format}`);
+    logService.info(`🔧 是否等于'sse': ${streamConfig?.format === 'sse'}`);
+    // ===== 调试日志结束 =====
+
+    // 使用HTTP服务发送流式请求（支持代理）
+    const httpService = (await import('./http')).httpService;
+    await httpService.sendStreamRequest(url, {
+      method: (options.method as string) || 'POST',
+      headers: options.headers as Record<string, string>,
+      body: options.body as string,
+      proxySettings: proxySettings.enabled ? proxySettings : undefined,
+      onData: (chunk: string) => {
+        logService.info(`🔍 收到流式数据块 (${chunk.length} chars): ${chunk.substring(0, 200)}${chunk.length > 200 ? '...' : ''}`);
         
-        // 解码数据块
-        const chunk = decoder.decode(value, { stream: true });
+        // 根据用户配置的格式解析流式响应
+        // 修复：如果没有format字段或者数据看起来像SSE，则使用SSE解析
+        const isSSEFormat = streamConfig?.format === 'sse' || 
+                           (!streamConfig?.format && chunk.includes('data:'));
         
-        // 处理SSE格式数据
-        const lines = chunk
-          .split('\n')
-          .filter(line => line.trim() !== '' && 
-                  line.trim() !== `data: ${streamConfig.finishCondition || '[DONE]'}`);
+        logService.info(`🔧 判断格式: streamConfig?.format="${streamConfig?.format}", isSSEFormat=${isSSEFormat}`);
         
-        for (const line of lines) {
-          const dataPrefix = streamConfig.dataPrefix || 'data: ';
-          if (line.startsWith(dataPrefix)) {
-            try {
-              const jsonData = JSON.parse(line.slice(dataPrefix.length));
+        if (isSSEFormat) {
+          // 处理SSE格式数据
+          const dataPrefix = streamConfig?.dataPrefix || 'data: ';
+          const lines = chunk
+            .split('\n')
+            .filter(line => line.trim() !== '' && 
+                    line.trim() !== `data: ${streamConfig?.finishCondition || '[DONE]'}`);
+          
+          logService.info(`📝 SSE格式，解析出 ${lines.length} 行数据`);
+          
+          for (const line of lines) {
+            if (line.startsWith(dataPrefix)) {
+              try {
+                const jsonStr = line.slice(dataPrefix.length);
+                const jsonData = JSON.parse(jsonStr);
+                
+                // 提取增量内容
+                const content = this.getNestedValue(jsonData, streamConfig!.contentPath);
+                if (content) {
+                  fullResponse += String(content);
+                  onUpdate(fullResponse, false);
+                }
+                
+                // 提取推理内容
+                const reasoningPath = streamConfig?.reasoningPath || provider.customConfig?.response.reasoningPath;
+                if (reasoningPath) {
+                  const reasoningContent = this.getNestedValue(jsonData, reasoningPath);
+                  if (reasoningContent) {
+                    reasoningFullResponse += String(reasoningContent);
+                    onUpdate(fullResponse, false, false, reasoningFullResponse);
+                  }
+                }
+              } catch (e) {
+                logService.error(`❌ 解析SSE JSON失败: ${e}`);
+              }
+            }
+          }
+        } else {
+          // 处理JSON数组格式（如Gemini）
+          logService.info(`📝 JSON数组格式，数据块长度: ${chunk.length}`);
+          
+          try {
+            // 尝试处理JSON数组中的对象
+            const jsonObjects = [];
+            
+            // 分割并清理JSON对象
+            const parts = chunk.split(/,\s*(?=\{)/).filter(part => part.trim());
+            
+            for (let part of parts) {
+              part = part.trim();
+              // 清理开头的符号
+              part = part.replace(/^[\[\,\s]+/, '');
+              // 清理结尾的符号  
+              part = part.replace(/[\]\,\s]+$/, '');
               
+              if (part.startsWith('{') && part.endsWith('}')) {
+                try {
+                  const jsonData = JSON.parse(part);
+                  jsonObjects.push(jsonData);
+                } catch {
+                  logService.debug(`跳过无效JSON片段: ${part.substring(0, 50)}`);
+                }
+              }
+            }
+            
+            logService.info(`📦 解析出 ${jsonObjects.length} 个JSON对象`);
+            
+            // 处理每个JSON对象
+            for (const jsonData of jsonObjects) {
               // 提取增量内容
-              const content = this.getNestedValue(jsonData, streamConfig.contentPath);
+              const content = this.getNestedValue(jsonData, streamConfig!.contentPath);
+              logService.info(`🎯 提取内容: "${content}"`);
+              
               if (content) {
                 fullResponse += String(content);
+                logService.info(`📝 累积响应: "${fullResponse}"`);
                 onUpdate(fullResponse, false);
               }
               
-              // 提取推理内容（如果配置了）
-              // 对于流式响应，优先使用流式配置的推理路径，因为结构不同（delta vs message）
-              const reasoningPath = streamConfig.reasoningPath || provider.customConfig.response.reasoningPath;
+              // 提取推理内容
+              const reasoningPath = streamConfig?.reasoningPath || provider.customConfig?.response.reasoningPath;
               if (reasoningPath) {
                 const reasoningContent = this.getNestedValue(jsonData, reasoningPath);
                 if (reasoningContent) {
                   reasoningFullResponse += String(reasoningContent);
-                  logService.debug(`收到推理内容: ${reasoningContent}`);
                   onUpdate(fullResponse, false, false, reasoningFullResponse);
                 }
               }
-            } catch (e) {
-              console.error('解析自定义SSE数据错误:', e);
             }
+          } catch (e) {
+            logService.error(`❌ 解析JSON数组失败: ${e}，原始数据: ${chunk.substring(0, 200)}`);
           }
         }
+      },
+      onEnd: () => {
+        // 流式传输完成
+        onUpdate(fullResponse, true, false, reasoningFullResponse);
+      },
+      onError: (error: string) => {
+        logService.error(`流式请求错误: ${error}`);
+        onUpdate(`流式请求错误: ${error}`, true, true);
       }
-      
-      // 流式传输完成
-      onUpdate(fullResponse, true, false, reasoningFullResponse);
-    } finally {
-      reader.releaseLock();
-    }
+    });
   }
 
   /**
@@ -1495,6 +1632,16 @@ class AIService {
     },
     structureConfig: MessageStructureConfig
   ): unknown {
+    // ========== 调试日志：buildVisualStructureMessages ==========
+    logService.info('🎨 buildVisualStructureMessages 调试开始');
+    logService.info(`📝 context.message: "${context.message}"`);
+    logService.info(`📚 context.history 长度: ${context.history?.length || 0}`);
+    if (context.history && context.history.length > 0) {
+      context.history.forEach((msg, index) => {
+        logService.info(`  history[${index}] ${msg.role}: "${msg.content}"`);
+      });
+    }
+    
     // 准备模板变量数据
     const templateData = {
       message: context.message,
@@ -1514,21 +1661,33 @@ class AIService {
         role: 'system',
         content: context.systemPrompt
       });
+      logService.info('➕ 添加了系统消息');
     }
     
-    // 添加历史消息
-    if (context.history) {
+    // 处理历史消息和当前消息（与buildMessagesArray保持一致的逻辑）
+    if (context.history && context.history.length > 0) {
+      // 如果有历史记录，直接使用（前端已经构建了完整的对话历史）
       allMessages.push(...context.history);
+      logService.info(`📋 使用前端提供的完整历史记录，包含 ${context.history.length} 条消息`);
+    } else {
+      // 如果没有历史记录，只添加当前消息
+      if (context.message && context.message.trim()) {
+        allMessages.push({
+          role: 'user',
+          content: context.message
+        });
+        logService.info('➕ 没有历史记录，添加当前用户消息');
+      }
     }
     
-    // 添加当前用户消息
-    allMessages.push({
-      role: 'user',
-      content: context.message
+    // ========== 调试日志：打印allMessages内容 ==========
+    logService.info(`🔍 allMessages 最终内容（${allMessages.length} 条）:`);
+    allMessages.forEach((msg, index) => {
+      logService.info(`  allMessages[${index}] ${msg.role}: "${msg.content}"`);
     });
 
     // 根据结构配置生成消息数组
-    return allMessages.map(msg => this.generateFromJsonNode(
+    const result = allMessages.map(msg => this.generateFromJsonNode(
       structureConfig.rootNode.arrayItemTemplate || structureConfig.rootNode,
       {
         ...templateData,
@@ -1536,6 +1695,15 @@ class AIService {
         content: msg.content
       }
     ));
+    
+    // ========== 调试日志：打印最终生成结果 ==========
+    logService.info(`🏁 可视化结构消息构建完成，生成 ${result.length} 条消息`);
+    result.forEach((msg, index) => {
+      logService.info(`🎨 生成消息[${index}]: ${JSON.stringify(msg)}`);
+    });
+    logService.info('🎨 buildVisualStructureMessages 调试结束');
+    
+    return result;
   }
 
   /**

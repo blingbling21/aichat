@@ -8,9 +8,11 @@ use tracing_subscriber::filter::EnvFilter;
 use serde::{Deserialize, Serialize};
 // 导入reqwest用于HTTP请求
 use reqwest::{Client, Proxy};
-// 导入std库用于HashMap和错误处理
+// 导入std库用于HashMap、错误处理和流处理
 use std::collections::HashMap;
 use std::time::Duration;
+use futures_util::stream::StreamExt;
+use tauri::{AppHandle, Emitter};
 
 /// 代理配置结构体
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -44,6 +46,26 @@ pub struct HttpResponse {
     pub error: Option<String>,
 }
 
+/// 流式请求参数结构体
+#[derive(Debug, Deserialize)]
+pub struct StreamRequestParams {
+    pub url: String,
+    pub method: String,
+    pub headers: Option<HashMap<String, String>>,
+    pub body: Option<String>,
+    pub proxy_config: Option<ProxyConfig>,
+    pub stream_id: String, // 用于标识流式请求的唯一ID
+}
+
+/// 流式响应事件结构体
+#[derive(Debug, Serialize, Clone)]
+pub struct StreamEvent {
+    pub stream_id: String,
+    pub event_type: String, // "data", "end", "error"
+    pub data: Option<String>,
+    pub error: Option<String>,
+}
+
 /// 创建HTTP客户端，支持代理配置
 fn create_http_client(proxy_config: Option<&ProxyConfig>) -> Result<Client, Box<dyn std::error::Error + Send + Sync>> {
     let mut client_builder = Client::builder()
@@ -52,10 +74,17 @@ fn create_http_client(proxy_config: Option<&ProxyConfig>) -> Result<Client, Box<
 
     if let Some(config) = proxy_config {
         if config.enabled {
+            // 清理host中可能包含的协议前缀
+            let clean_host = config.host
+                .strip_prefix("http://")
+                .or_else(|| config.host.strip_prefix("https://"))
+                .or_else(|| config.host.strip_prefix("socks5://"))
+                .unwrap_or(&config.host);
+
             let proxy_url = match config.proxy_type.as_str() {
-                "http" => format!("http://{}:{}", config.host, config.port),
-                "https" => format!("https://{}:{}", config.host, config.port),
-                "socks5" => format!("socks5://{}:{}", config.host, config.port),
+                "http" => format!("http://{}:{}", clean_host, config.port),
+                "https" => format!("https://{}:{}", clean_host, config.port),
+                "socks5" => format!("socks5://{}:{}", clean_host, config.port),
                 _ => return Err("不支持的代理类型".into()),
             };
 
@@ -143,6 +172,126 @@ async fn send_http_request(params: HttpRequestParams) -> Result<HttpResponse, St
         Err(e) => {
             error!("HTTP请求失败: {}", e);
             Err(format!("HTTP请求失败: {}", e))
+        }
+    }
+}
+
+/// 发送流式HTTP请求的Tauri命令
+#[tauri::command]
+async fn send_stream_request(app: AppHandle, params: StreamRequestParams) -> Result<String, String> {
+    info!("发送流式HTTP请求到: {}", params.url);
+    debug!("请求方法: {}, Stream ID: {}", params.method, params.stream_id);
+
+    let stream_id = params.stream_id.clone();
+    
+    // 创建HTTP客户端
+    let client = create_http_client(params.proxy_config.as_ref())
+        .map_err(|e| format!("创建HTTP客户端失败: {}", e))?;
+
+    // 构建请求
+    let mut request_builder = match params.method.to_uppercase().as_str() {
+        "GET" => client.get(&params.url),
+        "POST" => client.post(&params.url),
+        "PUT" => client.put(&params.url),
+        "DELETE" => client.delete(&params.url),
+        _ => return Err("不支持的HTTP方法".to_string()),
+    };
+
+    // 添加请求头
+    if let Some(headers) = params.headers {
+        for (key, value) in headers {
+            request_builder = request_builder.header(&key, &value);
+        }
+    }
+
+    // 添加请求体
+    if let Some(body) = params.body {
+        request_builder = request_builder.body(body);
+    }
+
+    // 发送请求并处理流式响应
+    match request_builder.send().await {
+        Ok(response) => {
+            let status = response.status().as_u16();
+            info!("流式HTTP请求成功建立，状态码: {}", status);
+
+            if !response.status().is_success() {
+                let error_msg = format!("HTTP错误: {}", status);
+                let _ = app.emit("stream-event", StreamEvent {
+                    stream_id: stream_id.clone(),
+                    event_type: "error".to_string(),
+                    data: None,
+                    error: Some(error_msg.clone()),
+                });
+                return Err(error_msg);
+            }
+
+            // 异步处理流式响应
+            let app_clone = app.clone();
+            let stream_id_clone = stream_id.clone();
+            
+            tokio::spawn(async move {
+                let mut stream = response.bytes_stream();
+                let mut chunk_count = 0;
+                
+                while let Some(chunk_result) = stream.next().await {
+                    chunk_count += 1;
+                    match chunk_result {
+                        Ok(chunk) => {
+                            info!("收到数据块 #{}: {} bytes", chunk_count, chunk.len());
+                            
+                            if let Ok(text) = std::str::from_utf8(&chunk) {
+                                info!("数据块内容: {:?}", text);
+                                
+                                // 发送数据事件
+                                let _ = app_clone.emit("stream-event", StreamEvent {
+                                    stream_id: stream_id_clone.clone(),
+                                    event_type: "data".to_string(),
+                                    data: Some(text.to_string()),
+                                    error: None,
+                                });
+                            } else {
+                                warn!("数据块不是有效的UTF-8文本");
+                            }
+                        }
+                        Err(e) => {
+                            error!("读取流式数据失败: {}", e);
+                            let _ = app_clone.emit("stream-event", StreamEvent {
+                                stream_id: stream_id_clone.clone(),
+                                event_type: "error".to_string(),
+                                data: None,
+                                error: Some(format!("读取流式数据失败: {}", e)),
+                            });
+                            break;
+                        }
+                    }
+                }
+                
+                info!("流式数据接收完成，总共收到 {} 个数据块", chunk_count);
+                
+                // 发送结束事件
+                let _ = app_clone.emit("stream-event", StreamEvent {
+                    stream_id: stream_id_clone.clone(),
+                    event_type: "end".to_string(),
+                    data: None,
+                    error: None,
+                });
+                
+                info!("流式请求 {} 处理完成", stream_id_clone);
+            });
+
+            Ok(format!("流式请求已启动，Stream ID: {}", stream_id))
+        }
+        Err(e) => {
+            error!("流式HTTP请求失败: {}", e);
+            let error_msg = format!("流式HTTP请求失败: {}", e);
+            let _ = app.emit("stream-event", StreamEvent {
+                stream_id: stream_id.clone(),
+                event_type: "error".to_string(),
+                data: None,
+                error: Some(error_msg.clone()),
+            });
+            Err(error_msg)
         }
     }
 }
@@ -276,6 +425,7 @@ pub fn run() {
             log_error,
             log_debug,
             send_http_request,
+            send_stream_request,
             test_proxy_connection
         ])
         // 运行应用

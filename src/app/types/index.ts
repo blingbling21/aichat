@@ -70,6 +70,41 @@ export type APIBodyFieldConfig = {
 };
 
 /**
+ * 流式请求配置
+ */
+export type StreamConfig = {
+  enabled: boolean;
+  // 流式请求方式
+  requestType: 'body_field' | 'url_endpoint' | 'query_param';
+  
+  // 请求配置：如何发送流式请求
+  request: {
+    // body_field类型：通过请求体字段控制（如OpenAI的stream: true）
+    bodyFieldPath?: string; // 如 "stream"
+    bodyFieldValue?: boolean | string; // 如 true
+    
+    // url_endpoint类型：通过改变URL端点（如Gemini的generateContent -> streamGenerateContent）
+    urlReplacement?: {
+      from: string; // 替换源，如 "generateContent"
+      to: string;   // 替换目标，如 "streamGenerateContent"
+    };
+    
+    // query_param类型：通过查询参数控制
+    queryParamKey?: string; // 如 "stream"
+    queryParamValue?: string; // 如 "true"
+  };
+  
+  // 响应配置：如何解析流式响应
+  response: {
+    format: 'sse' | 'json'; // 响应格式：SSE格式（如OpenAI）或JSON数组格式（如Gemini）
+    dataPrefix?: string; // SSE数据前缀，如 "data: "（仅SSE格式使用）
+    contentPath: string; // 流式响应中内容的路径，如 "choices[0].delta.content"
+    reasoningPath?: string; // 推理内容路径，如 "choices[0].delta.reasoning_content"
+    finishCondition?: string; // 结束条件，如 "[DONE]"
+  };
+};
+
+/**
  * API响应解析配置
  */
 export type APIResponseConfig = {
@@ -77,14 +112,6 @@ export type APIResponseConfig = {
   contentPath: string; // 如 "choices[0].message.content", "completion"
   // 推理内容提取路径（可选，支持非流式和流式）
   reasoningPath?: string; // 如 "choices[0].message.reasoning_content"
-  // 流式响应配置
-  streamConfig?: {
-    enabled: boolean;
-    dataPrefix?: string; // SSE数据前缀，如 "data: "
-    contentPath: string; // 流式响应中内容的路径
-    reasoningPath?: string; // 推理内容路径
-    finishCondition?: string; // 结束条件，如 "[DONE]"
-  };
   // 错误响应处理
   errorConfig?: {
     messagePath?: string; // 错误信息路径，如 "error.message"
@@ -110,6 +137,9 @@ export type CustomAPIConfig = {
   
   // 请求体配置
   bodyFields: APIBodyFieldConfig[];
+  
+  // 流式请求配置 - 新增独立配置
+  streamConfig?: StreamConfig;
   
   // 响应解析配置
   response: APIResponseConfig;
