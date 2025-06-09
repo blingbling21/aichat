@@ -10,6 +10,9 @@ export type Message = {
   canceled?: boolean; // 标记消息是否被取消生成
   reasoningContent?: string; // deepseek-reasoner模型的推理过程
   reasoningCollapsed?: boolean; // 推理内容是否折叠
+  generationStartTime?: Date; // 生成开始时间
+  generationEndTime?: Date; // 生成结束时间
+  generationDuration?: number; // 生成耗时（毫秒）
 };
 
 /**

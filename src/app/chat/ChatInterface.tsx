@@ -323,21 +323,28 @@ const ChatInterface: FC = () => {
     setMessages(prevMessages => {
       return prevMessages.map(msg => {
         if (msg.id === assistantMessageId) {
-          // 生成中始终展开，生成完成后自动折叠（有推理内容时）
+          // 推理内容始终保持展开状态
           let reasoningCollapsed = msg.reasoningCollapsed;
           if (reasoningContent !== undefined) {
-            if (!done) {
-              reasoningCollapsed = false;
-            } else {
-              reasoningCollapsed = true;
-            }
+            reasoningCollapsed = false;
           }
+          
+          // 计算生成耗时
+          let generationDuration = msg.generationDuration;
+          let generationEndTime = msg.generationEndTime;
+          if (done && msg.generationStartTime) {
+            generationEndTime = new Date();
+            generationDuration = generationEndTime.getTime() - msg.generationStartTime.getTime();
+          }
+          
           return {
             ...msg,
             content: content,
             reasoningContent: reasoningContent !== undefined ? reasoningContent : msg.reasoningContent,
             streaming: !done,
             reasoningCollapsed,
+            generationEndTime,
+            generationDuration,
             // 如果是错误且完成，则标记为取消状态
             canceled: done && error ? true : undefined
           };
@@ -375,12 +382,14 @@ const ChatInterface: FC = () => {
     
     // 创建一个空的助手消息，用于流式更新
     const assistantMessageId = (Date.now() + 1).toString();
+    const generationStartTime = new Date();
     const assistantMessage: Message = {
       id: assistantMessageId,
       content: '',
       role: 'assistant',
       timestamp: new Date(),
-      streaming: true // 标记为流式消息
+      streaming: true, // 标记为流式消息
+      generationStartTime // 记录生成开始时间
     };
     
     // 使用函数式更新来获取最新的messages状态
@@ -432,6 +441,7 @@ const ChatInterface: FC = () => {
             );
             
             // 更新助手消息
+            const endTime = new Date();
             setMessages(prev => 
               prev.map(msg => 
                 msg.id === assistantMessageId 
@@ -439,7 +449,9 @@ const ChatInterface: FC = () => {
                       ...msg,
                       content: response.content,
                       reasoningContent: response.reasoningContent,
-                      streaming: false
+                      streaming: false,
+                      generationEndTime: endTime,
+                      generationDuration: msg.generationStartTime ? endTime.getTime() - msg.generationStartTime.getTime() : undefined
                     }
                   : msg
               )
@@ -451,13 +463,16 @@ const ChatInterface: FC = () => {
           logService.error('发送消息失败', error);
           
           // 更新助手消息为错误消息
+          const errorEndTime = new Date();
           setMessages(prev => 
             prev.map(msg => 
               msg.id === assistantMessageId 
                 ? {
                     ...msg,
                     content: '发送消息失败，请检查网络或API设置。',
-                    streaming: false
+                    streaming: false,
+                    generationEndTime: errorEndTime,
+                    generationDuration: msg.generationStartTime ? errorEndTime.getTime() - msg.generationStartTime.getTime() : undefined
                   }
                 : msg
             )
@@ -733,6 +748,13 @@ const ChatInterface: FC = () => {
                 {formatTime(message.timestamp)}
                 {message.streaming && ' · 正在生成...'}
                 {message.canceled && ' · 已中断'}
+                {message.role === 'assistant' && message.generationDuration && !message.streaming && (
+                  <span className="ml-2 text-blue-500">
+                    · 耗时 {message.generationDuration >= 1000 
+                      ? `${(message.generationDuration / 1000).toFixed(1)}s` 
+                      : `${message.generationDuration}ms`}
+                  </span>
+                )}
               </span>
             </div>
           ))

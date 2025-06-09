@@ -864,13 +864,13 @@ const SettingsInterface: FC = () => {
                 </div>
               )}
               
-              {/* 测试代理连接和保存按钮 */}
-              <div className="mt-4 pt-4 border-t space-y-2">
+              {/* 测试代理连接按钮 */}
+              <div className="mt-4 pt-4 border-t">
                 <Button
                   onClick={handleTestProxy}
                   disabled={!proxySettings.enabled || !proxySettings.host || !proxySettings.port || testingProxy}
                   variant="outline"
-                  className="w-full cursor-pointer"
+                  className="w-full cursor-pointer mb-2"
                 >
                   {testingProxy ? (
                     <>
@@ -881,22 +881,24 @@ const SettingsInterface: FC = () => {
                     '测试代理连接'
                   )}
                 </Button>
-                
-                {/* 保存代理设置按钮 */}
-                <Button
-                  onClick={() => {
-                    storageService.saveProxySettings(proxySettings);
-                    toast.success('代理设置已保存');
-                    logService.info('代理设置已保存');
-                  }}
-                  className="w-full cursor-pointer"
-                >
-                  <Save size={16} className="mr-2" />
-                  保存代理设置
-                </Button>
               </div>
             </>
           )}
+          
+          {/* 保存代理设置按钮 - 始终显示 */}
+          <div className={`${proxySettings.enabled ? '' : 'mt-4 pt-4 border-t'}`}>
+            <Button
+              onClick={() => {
+                storageService.saveProxySettings(proxySettings);
+                toast.success('代理设置已保存');
+                logService.info('代理设置已保存');
+              }}
+              className="w-full cursor-pointer"
+            >
+              <Save size={16} className="mr-2" />
+              保存代理设置
+            </Button>
+          </div>
         </CardContent>
       </Card>
       

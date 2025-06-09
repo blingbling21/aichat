@@ -69,7 +69,7 @@ pub struct StreamEvent {
 /// 创建HTTP客户端，支持代理配置
 fn create_http_client(proxy_config: Option<&ProxyConfig>) -> Result<Client, Box<dyn std::error::Error + Send + Sync>> {
     let mut client_builder = Client::builder()
-        .timeout(Duration::from_secs(30))
+        .timeout(Duration::from_secs(300)) // 增加到5分钟超时
         .user_agent("AiChat/1.0");
 
     if let Some(config) = proxy_config {
@@ -97,6 +97,47 @@ fn create_http_client(proxy_config: Option<&ProxyConfig>) -> Result<Client, Box<
                 if let (Some(username), Some(password)) = (&config.username, &config.password) {
                     proxy = proxy.basic_auth(username, password);
                     info!("代理认证已配置");
+                }
+            }
+
+            client_builder = client_builder.proxy(proxy);
+        }
+    }
+
+    Ok(client_builder.build()?)
+}
+
+/// 创建流式HTTP客户端，支持代理配置，无超时限制
+fn create_stream_http_client(proxy_config: Option<&ProxyConfig>) -> Result<Client, Box<dyn std::error::Error + Send + Sync>> {
+    let mut client_builder = Client::builder()
+        .user_agent("AiChat/1.0");
+    // 流式请求不设置超时，因为需要持续接收数据
+
+    if let Some(config) = proxy_config {
+        if config.enabled {
+            // 清理host中可能包含的协议前缀
+            let clean_host = config.host
+                .strip_prefix("http://")
+                .or_else(|| config.host.strip_prefix("https://"))
+                .or_else(|| config.host.strip_prefix("socks5://"))
+                .unwrap_or(&config.host);
+
+            let proxy_url = match config.proxy_type.as_str() {
+                "http" => format!("http://{}:{}", clean_host, config.port),
+                "https" => format!("https://{}:{}", clean_host, config.port),
+                "socks5" => format!("socks5://{}:{}", clean_host, config.port),
+                _ => return Err("不支持的代理类型".into()),
+            };
+
+            info!("使用流式代理: {} (类型: {})", proxy_url, config.proxy_type);
+
+            let mut proxy = Proxy::all(&proxy_url)?;
+
+            // 如果需要认证
+            if config.requires_auth {
+                if let (Some(username), Some(password)) = (&config.username, &config.password) {
+                    proxy = proxy.basic_auth(username, password);
+                    info!("流式代理认证已配置");
                 }
             }
 
@@ -184,9 +225,9 @@ async fn send_stream_request(app: AppHandle, params: StreamRequestParams) -> Res
 
     let stream_id = params.stream_id.clone();
     
-    // 创建HTTP客户端
-    let client = create_http_client(params.proxy_config.as_ref())
-        .map_err(|e| format!("创建HTTP客户端失败: {}", e))?;
+    // 创建流式HTTP客户端（无超时限制）
+    let client = create_stream_http_client(params.proxy_config.as_ref())
+        .map_err(|e| format!("创建流式HTTP客户端失败: {}", e))?;
 
     // 构建请求
     let mut request_builder = match params.method.to_uppercase().as_str() {
