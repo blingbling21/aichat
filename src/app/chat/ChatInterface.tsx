@@ -6,7 +6,7 @@ import { Message, AIProvider, AIModel } from '../types';
 import { aiService } from '../services/ai';
 import { storageService } from '../services/storage';
 import { logService } from '../services/log';
-import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card, CardContent } from "@/components/ui/card";
@@ -50,6 +50,8 @@ const ChatInterface: FC = () => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   // 消息容器引用，用于监听滚动事件
   const messagesContainerRef = useRef<HTMLDivElement>(null);
+  // 输入框引用，用于自动调整高度
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // 加载本地存储的数据，确保在客户端执行
   useEffect(() => {
@@ -326,7 +328,7 @@ const ChatInterface: FC = () => {
           // 推理内容始终保持展开状态
           let reasoningCollapsed = msg.reasoningCollapsed;
           if (reasoningContent !== undefined) {
-            reasoningCollapsed = false;
+              reasoningCollapsed = false;
           }
           
           // 计算生成耗时
@@ -335,7 +337,7 @@ const ChatInterface: FC = () => {
           if (done && msg.generationStartTime) {
             generationEndTime = new Date();
             generationDuration = generationEndTime.getTime() - msg.generationStartTime.getTime();
-          }
+            }
           
           return {
             ...msg,
@@ -603,6 +605,33 @@ const ChatInterface: FC = () => {
     toast.info('语音输入功能还在开发中');
     logService.info('用户请求语音输入');
   };
+
+  // 自动调整输入框高度
+  const adjustTextareaHeight = () => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    
+    // 重置高度以获取真实的滚动高度
+    textarea.style.height = 'auto';
+    
+    // 计算新高度
+    const scrollHeight = textarea.scrollHeight;
+    const lineHeight = 24; // 假设每行24px
+    const maxLines = 5;
+    const maxHeight = lineHeight * maxLines;
+    
+    // 设置新高度，但不超过最大高度
+    const newHeight = Math.min(scrollHeight, maxHeight);
+    textarea.style.height = newHeight + 'px';
+    
+    // 如果内容超过最大高度，显示滚动条
+    textarea.style.overflowY = scrollHeight > maxHeight ? 'auto' : 'hidden';
+  };
+
+  // 监听输入变化，自动调整高度
+  useEffect(() => {
+    adjustTextareaHeight();
+  }, [input]);
 
   return (
     <div className="flex flex-col h-full">
@@ -894,8 +923,9 @@ const ChatInterface: FC = () => {
           )}
         </div>
         
-        <div className="flex items-center space-x-2">
-          <Input
+        <div className="flex items-end space-x-2">
+          <Textarea
+            ref={textareaRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
@@ -905,8 +935,10 @@ const ChatInterface: FC = () => {
               }
             }}
             placeholder="输入消息..."
-            className="flex-1"
+            className="flex-1 min-h-[40px] max-h-[120px] resize-none"
             disabled={isLoading}
+            rows={1}
+            style={{ height: '40px', overflowY: 'hidden' }}
           />
           {isLoading ? (
             <Button

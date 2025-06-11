@@ -317,3 +317,23 @@ button, a, select, input[type="checkbox"], input[type="radio"], .cursor-pointer 
   content: '';
   display: none;
 }
+
+/* Sonner Toast 成功图标自定义样式 */
+[data-sonner-toast][data-type="success"] [data-icon] {
+  color: #22c55e !important; /* 绿色 */
+}
+
+[data-sonner-toast][data-type="success"] [data-icon] svg {
+  color: #22c55e !important; /* 绿色 */
+  fill: #22c55e !important; /* 绿色 */
+}
+
+/* 深色模式下的成功图标 */
+.dark [data-sonner-toast][data-type="success"] [data-icon] {
+  color: #16a34a !important; /* 深绿色 */
+}
+
+.dark [data-sonner-toast][data-type="success"] [data-icon] svg {
+  color: #16a34a !important; /* 深绿色 */
+  fill: #16a34a !important; /* 深绿色 */
+}

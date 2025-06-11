@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, FC } from 'react';
-import { Plus, Trash2, Save, Edit, Check, Zap, Loader2, Settings, Wrench } from 'lucide-react';
+import { Plus, Trash2, Save, Edit, Check, Zap, Loader2, Settings, Wrench, Download, DollarSign } from 'lucide-react';
 import { AIProvider, ProxySettings, AIModel, ModelFeatures } from '../types';
 import { storageService } from '../services/storage';
 import { aiService } from '../services/ai';
@@ -21,6 +21,8 @@ import {
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import AdvancedProviderConfig from '../components/AdvancedProviderConfig';
+import APIAutoFetchConfig from '../components/APIAutoFetchConfig';
+import BalanceAPIConfig from '../components/BalanceAPIConfig';
 import {
   Select,
   SelectContent,
@@ -58,6 +60,14 @@ const SettingsInterface: FC = () => {
   // 高级配置对话框状态
   const [advancedConfigOpen, setAdvancedConfigOpen] = useState(false);
   const [selectedProvider, setSelectedProvider] = useState<AIProvider | null>(null);
+  
+  // API自动获取配置对话框状态
+  const [apiAutoFetchConfigOpen, setApiAutoFetchConfigOpen] = useState(false);
+  const [selectedProviderForAutoFetch, setSelectedProviderForAutoFetch] = useState<AIProvider | null>(null);
+  
+  // 定价API配置对话框状态
+  const [pricingConfigOpen, setPricingConfigOpen] = useState(false);
+  const [selectedProviderForPricing, setSelectedProviderForPricing] = useState<AIProvider | null>(null);
   
   // 新提供商表单状态
   const [newProvider, setNewProvider] = useState<Partial<AIProvider>>({
@@ -140,115 +150,21 @@ const SettingsInterface: FC = () => {
     
     const newId = Date.now().toString();
     
-    // 预设模型列表
-    let presetModels: AIModel[] = [];
-    
-    // 根据提供商名称预设模型
-    if (newProvider.name.toLowerCase().includes('openai') || newProvider.name.toLowerCase().includes('chatgpt')) {
-      presetModels = [
-        { 
-          id: 'gpt-3.5-turbo',
-          features: {
-            reasoning: false,
-            image: false,
-            video: false,
-            voice: false
-          }
-        },
-        { 
-          id: 'gpt-4',
-          features: {
-            reasoning: true,
-            image: false,
-            video: false,
-            voice: false
-          }
-        },
-        { 
-          id: 'gpt-4-turbo',
-          features: {
-            reasoning: true,
-            image: false,
-            video: false,
-            voice: false
-          }
-        }
-      ];
-    } else if (newProvider.name.toLowerCase().includes('deepseek')) {
-      // 使用DeepSeek API文档中指定的标准模型名称
-      presetModels = [
-        { 
-          id: 'deepseek-chat',
-          features: {
-            reasoning: false,
-            image: false,
-            video: false,
-            voice: false
-          }
-        },
-        { 
-          id: 'deepseek-reasoner',
-          features: {
-            reasoning: true,
-            image: false,
-            video: false,
-            voice: false
-          }
-        }
-      ];
-      
-      // 确保API端点正确
-      if (!newProvider.apiEndpoint || !newProvider.apiEndpoint.includes('api.deepseek.com')) {
-        newProvider.apiEndpoint = 'https://api.deepseek.com/chat/completions';
-        logService.info('自动设置DeepSeek API端点');
-      }
-    } else if (newProvider.name.toLowerCase().includes('claude') || newProvider.name.toLowerCase().includes('anthropic')) {
-      presetModels = [
-        { 
-          id: 'claude-3-opus-20240229',
-          features: {
-            reasoning: true,
-            image: true,
-            video: false,
-            voice: false
-          }
-        },
-        { 
-          id: 'claude-3-sonnet-20240229',
-          features: {
-            reasoning: false,
-            image: true,
-            video: false,
-            voice: false
-          }
-        },
-        { 
-          id: 'claude-3-haiku-20240307',
-          features: {
-            reasoning: false,
-            image: false,
-            video: false,
-            voice: false
-          }
-        }
-      ];
-    }
-    
-    // 创建新提供商，不再强制添加default模型
+    // 创建新提供商，不自动添加任何预设模型
     const newProviderData: AIProvider = {
       id: newId,
       name: newProvider.name!,
       apiEndpoint: newProvider.apiEndpoint!,
       apiKey: newProvider.apiKey || '',
-      models: presetModels, // 直接使用预设模型，可能为空数组
-      defaultModelId: presetModels.length > 0 ? presetModels[0].id : undefined
+      models: [], // 不添加任何预设模型
+      defaultModelId: undefined // 没有默认模型
     };
     
     const updatedProviders = [...providers, newProviderData];
     setProviders(updatedProviders);
     storageService.saveProviders(updatedProviders);
     
-    logService.info(`已添加新AI提供商: ${newProvider.name}，预设了 ${presetModels.length} 个模型`);
+    logService.info(`已添加新AI提供商: ${newProvider.name}`);
     
     // 重置表单
     setNewProvider({
@@ -551,6 +467,45 @@ const SettingsInterface: FC = () => {
     setSelectedProvider(null);
   };
 
+  // 新增：打开API自动获取配置对话框
+  const handleApiAutoFetchConfig = (providerId: string) => {
+    const provider = providers.find(p => p.id === providerId);
+    if (provider) {
+      setSelectedProviderForAutoFetch(provider);
+      setApiAutoFetchConfigOpen(true);
+    }
+  };
+
+  // 新增：保存API自动获取配置
+  const handleApiAutoFetchConfigSave = (updatedProvider: AIProvider) => {
+    const updatedProviders = providers.map(p => 
+      p.id === updatedProvider.id ? updatedProvider : p
+    );
+    storageService.saveProviders(updatedProviders);
+    setProviders(updatedProviders);
+    setApiAutoFetchConfigOpen(false);
+    setSelectedProviderForAutoFetch(null);
+  };
+
+  // 新增：打开定价API配置对话框
+  const handlePricingConfig = (providerId: string) => {
+    const provider = providers.find(p => p.id === providerId);
+    if (provider) {
+      setSelectedProviderForPricing(provider);
+      setPricingConfigOpen(true);
+    }
+  };
+
+  // 新增：保存定价API配置
+  const handlePricingConfigSave = (updatedProvider: AIProvider) => {
+    const updatedProviders = providers.map(p => 
+      p.id === updatedProvider.id ? updatedProvider : p
+    );
+    storageService.saveProviders(updatedProviders);
+    setProviders(updatedProviders);
+    // 注意：不关闭弹出框，让BalanceAPIConfig组件内部处理页面切换
+  };
+
   return (
     <div className="container mx-auto p-6 max-w-4xl">
       <h1 className="text-2xl font-bold mb-6">设置</h1>
@@ -634,6 +589,15 @@ const SettingsInterface: FC = () => {
                             <span className="ml-1">模型</span>
                           </Button>
                           <Button 
+                            onClick={() => handlePricingConfig(provider.id)}
+                            variant="outline"
+                            size="sm"
+                            className="text-orange-500 cursor-pointer"
+                          >
+                            <DollarSign size={16} />
+                            <span className="ml-1">余额</span>
+                          </Button>
+                          <Button 
                             onClick={() => handleAdvancedConfig(provider.id)}
                             variant="outline"
                             size="sm"
@@ -676,11 +640,10 @@ const SettingsInterface: FC = () => {
                     <div>
                       <Label className="block mb-1">默认模型</Label>
                       <div className="text-sm text-gray-500">
-                        {provider.models && provider.models.length > 0 ? (
-                          provider.models.find(m => m.id === provider.defaultModelId)?.id || 
-                          provider.models[0].id
+                        {provider.defaultModelId ? (
+                          provider.models?.find(m => m.id === provider.defaultModelId)?.id || "未找到模型"
                         ) : (
-                          "未设置模型"
+                          "未设置默认模型"
                         )}
                       </div>
                     </div>
@@ -922,105 +885,118 @@ const SettingsInterface: FC = () => {
       
       {/* 模型管理对话框 */}
       <Dialog open={modelDialogOpen} onOpenChange={setModelDialogOpen}>
-        <DialogContent className="sm:max-w-[600px]">
+        <DialogContent className="sm:max-w-[600px] max-h-[80vh] flex flex-col">
           <DialogHeader>
-            <DialogTitle>模型管理</DialogTitle>
+            <DialogTitle className="flex items-center justify-between">
+              <span>模型管理</span>
+              <Button 
+                onClick={() => handleApiAutoFetchConfig(currentProvider)}
+                variant="outline"
+                size="sm"
+                className="text-blue-500"
+              >
+                <Download size={16} />
+                <span className="ml-1">API获取</span>
+              </Button>
+            </DialogTitle>
           </DialogHeader>
           
           {currentProvider && (
-            <>
-              <div className="space-y-4 my-4">
+            <div className="flex flex-col min-h-0 flex-1">
+              <div className="space-y-4 my-4 flex-1 min-h-0">
                 <h3 className="font-medium text-sm text-gray-500">现有模型</h3>
                 
                 {providers.find(p => p.id === currentProvider)?.models.length === 0 ? (
                   <div className="text-center py-8 text-gray-500">
                     <div className="text-sm">暂无模型</div>
-                    <div className="text-xs mt-1">请在下方添加新模型</div>
+                    <div className="text-xs mt-1">请在下方添加新模型，或点击右上角的&ldquo;API获取&rdquo;按钮自动获取</div>
                   </div>
                 ) : (
-                  providers.find(p => p.id === currentProvider)?.models.map(model => (
-                    <div key={model.id} className="p-3 border rounded-md space-y-3">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <div className="font-medium">{model.id}</div>
-                          <div className="text-xs text-gray-500">ID: {model.id}</div>
-                        </div>
-                        <div className="flex gap-2 items-center">
-                          {providers.find(p => p.id === currentProvider)?.defaultModelId === model.id ? (
-                            <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded-full">默认</span>
-                          ) : (
+                  <div className="space-y-3 max-h-80 overflow-y-auto pr-2">
+                    {providers.find(p => p.id === currentProvider)?.models.map(model => (
+                      <div key={model.id} className="p-3 border rounded-md space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <div className="font-medium">{model.id}</div>
+                            <div className="text-xs text-gray-500">ID: {model.id}</div>
+                          </div>
+                          <div className="flex gap-2 items-center">
+                            {providers.find(p => p.id === currentProvider)?.defaultModelId === model.id ? (
+                              <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded-full">默认</span>
+                            ) : (
+                              <Button 
+                                variant="outline" 
+                                size="sm" 
+                                onClick={() => handleSetDefaultModel(currentProvider, model.id)}
+                              >
+                                设为默认
+                              </Button>
+                            )}
                             <Button 
                               variant="outline" 
                               size="sm" 
-                              onClick={() => handleSetDefaultModel(currentProvider, model.id)}
+                              className="text-destructive"
+                              onClick={() => handleDeleteModel(currentProvider, model.id)}
                             >
-                              设为默认
+                              <Trash2 size={14} />
                             </Button>
-                          )}
-                          <Button 
-                            variant="outline" 
-                            size="sm" 
-                            className="text-destructive"
-                            onClick={() => handleDeleteModel(currentProvider, model.id)}
-                          >
-                            <Trash2 size={14} />
-                          </Button>
+                          </div>
                         </div>
-                      </div>
-                      
-                      <div className="border-t pt-3">
-                        <div className="mb-2 flex justify-between items-center">
-                          <h4 className="text-sm font-medium">支持的功能</h4>
-                        </div>
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                          <div className="flex items-center space-x-2">
-                            <Checkbox 
-                              id={`reasoning-${model.id}`}
-                              checked={model.features?.reasoning || false}
-                              onCheckedChange={(checked) => 
-                                handleFeatureChange(currentProvider, model.id, 'reasoning', checked === true)
-                              }
-                            />
-                            <Label htmlFor={`reasoning-${model.id}`} className="text-sm">推理</Label>
+                        
+                        <div className="border-t pt-3">
+                          <div className="mb-2 flex justify-between items-center">
+                            <h4 className="text-sm font-medium">支持的功能</h4>
                           </div>
-                          <div className="flex items-center space-x-2">
-                            <Checkbox 
-                              id={`image-${model.id}`}
-                              checked={model.features?.image || false}
-                              onCheckedChange={(checked) => 
-                                handleFeatureChange(currentProvider, model.id, 'image', checked === true)
-                              }
-                            />
-                            <Label htmlFor={`image-${model.id}`} className="text-sm">图片</Label>
-                          </div>
-                          <div className="flex items-center space-x-2">
-                            <Checkbox 
-                              id={`video-${model.id}`}
-                              checked={model.features?.video || false}
-                              onCheckedChange={(checked) => 
-                                handleFeatureChange(currentProvider, model.id, 'video', checked === true)
-                              }
-                            />
-                            <Label htmlFor={`video-${model.id}`} className="text-sm">视频</Label>
-                          </div>
-                          <div className="flex items-center space-x-2">
-                            <Checkbox 
-                              id={`voice-${model.id}`}
-                              checked={model.features?.voice || false}
-                              onCheckedChange={(checked) => 
-                                handleFeatureChange(currentProvider, model.id, 'voice', checked === true)
-                              }
-                            />
-                            <Label htmlFor={`voice-${model.id}`} className="text-sm">语音</Label>
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                            <div className="flex items-center space-x-2">
+                              <Checkbox 
+                                id={`reasoning-${model.id}`}
+                                checked={model.features?.reasoning || false}
+                                onCheckedChange={(checked) => 
+                                  handleFeatureChange(currentProvider, model.id, 'reasoning', checked === true)
+                                }
+                              />
+                              <Label htmlFor={`reasoning-${model.id}`} className="text-sm">推理</Label>
+                            </div>
+                            <div className="flex items-center space-x-2">
+                              <Checkbox 
+                                id={`image-${model.id}`}
+                                checked={model.features?.image || false}
+                                onCheckedChange={(checked) => 
+                                  handleFeatureChange(currentProvider, model.id, 'image', checked === true)
+                                }
+                              />
+                              <Label htmlFor={`image-${model.id}`} className="text-sm">图片</Label>
+                            </div>
+                            <div className="flex items-center space-x-2">
+                              <Checkbox 
+                                id={`video-${model.id}`}
+                                checked={model.features?.video || false}
+                                onCheckedChange={(checked) => 
+                                  handleFeatureChange(currentProvider, model.id, 'video', checked === true)
+                                }
+                              />
+                              <Label htmlFor={`video-${model.id}`} className="text-sm">视频</Label>
+                            </div>
+                            <div className="flex items-center space-x-2">
+                              <Checkbox 
+                                id={`voice-${model.id}`}
+                                checked={model.features?.voice || false}
+                                onCheckedChange={(checked) => 
+                                  handleFeatureChange(currentProvider, model.id, 'voice', checked === true)
+                                }
+                              />
+                              <Label htmlFor={`voice-${model.id}`} className="text-sm">语音</Label>
+                            </div>
                           </div>
                         </div>
                       </div>
-                    </div>
-                  ))
+                    ))}
+                  </div>
                 )}
               </div>
               
-              <div className="border-t pt-4">
+              <div className="border-t pt-4 flex-shrink-0">
                 <h3 className="font-medium text-sm text-gray-500 mb-2">添加新模型</h3>
                 <div className="space-y-3">
                   <div>
@@ -1032,11 +1008,6 @@ const SettingsInterface: FC = () => {
                       placeholder="例如: deepseek-chat, gpt-4, claude-3-sonnet-20240229"
                       className="mb-3"
                     />
-                    {providers.find(p => p.id === currentProvider)?.name.toLowerCase().includes('deepseek') && (
-                      <div className="text-xs text-blue-600 mb-3">
-                        DeepSeek 官方模型ID: <code>deepseek-chat</code> 或 <code>deepseek-reasoner</code>
-                      </div>
-                    )}
                     
                     <div className="mb-2">
                       <h4 className="text-sm font-medium mb-1">支持的功能</h4>
@@ -1115,7 +1086,7 @@ const SettingsInterface: FC = () => {
                   </Button>
                 </div>
               </div>
-            </>
+            </div>
           )}
         </DialogContent>
       </Dialog>
@@ -1126,6 +1097,22 @@ const SettingsInterface: FC = () => {
         onClose={() => setAdvancedConfigOpen(false)}
         provider={selectedProvider}
         onSave={handleAdvancedConfigSave}
+      />
+
+      {/* API自动获取配置对话框 */}
+      <APIAutoFetchConfig
+        open={apiAutoFetchConfigOpen}
+        onClose={() => setApiAutoFetchConfigOpen(false)}
+        provider={selectedProviderForAutoFetch}
+        onSave={handleApiAutoFetchConfigSave}
+      />
+
+      {/* 账户余额API配置对话框 */}
+      <BalanceAPIConfig
+        open={pricingConfigOpen}
+        onClose={() => setPricingConfigOpen(false)}
+        provider={selectedProviderForPricing}
+        onSave={handlePricingConfigSave}
       />
     </div>
   );

@@ -41,8 +41,10 @@ export type AIModel = {
  */
 export type APIHeaderConfig = {
   key: string;
-  value: string;
+  value?: string;
   valueTemplate?: string; // 支持模板，如 "Bearer {apiKey}"
+  valueType: 'static' | 'template';
+  description?: string;
 };
 
 /**
@@ -165,6 +167,63 @@ export type APIQueryParamConfig = {
 };
 
 /**
+ * 余额API响应字段配置
+ */
+export type BalanceResponseField = {
+  fieldPath: string; // 字段路径，如 "is_available"
+  displayName: string; // 显示名称，如 "账户可用状态"
+};
+
+/**
+ * API自动获取配置
+ */
+export type APIAutoFetchConfig = {
+  // 模型列表API配置
+  modelsApi?: {
+    enabled?: boolean;
+    endpoint?: string; // API端点，如 "https://api.openai.com/v1/models"
+    method?: 'GET' | 'POST';
+    headers?: APIHeaderConfig[]; // 请求头，如认证信息
+    responsePath?: string; // 模型列表在响应中的路径，如 "data" 或 ""（根级别）
+    modelIdPath?: string; // 模型ID在每个模型对象中的路径，如 "id"
+    modelNamePath?: string; // 模型名称路径，如 "name" 或 "id"（如果与ID相同）
+    modelDescriptionPath?: string; // 模型描述路径，如 "description"
+    filterPattern?: string; // 模型过滤正则表达式，如 "^gpt-" 只获取GPT模型
+  };
+  
+  // 费用/定价API配置
+  pricingApi?: {
+    enabled?: boolean;
+    endpoint?: string; // API端点
+    method?: 'GET' | 'POST';
+    headers?: APIHeaderConfig[];
+    responsePath?: string; // 定价信息在响应中的路径
+    modelPricePath?: string; // 每个模型价格的路径
+  };
+
+  // 账户余额API配置
+  balanceApi?: {
+    enabled?: boolean;
+    endpoint?: string; // API端点，如 "https://api.deepseek.com/user/balance"
+    method?: 'GET' | 'POST';
+    headers?: APIHeaderConfig[]; // 请求头，如认证信息
+    responsePath?: string; // 余额信息在响应中的路径，如 ""（根级别）
+    balanceInfoPath?: string; // 余额字段路径，如 "balance_infos[0].total_balance"
+    currencyPath?: string; // 货币字段路径，如 "balance_infos[0].currency"
+    availablePath?: string; // 可用状态路径，如 "is_available"
+    // 新增：响应字段配置
+    responseFields?: BalanceResponseField[];
+  };
+  
+  // 自动更新设置
+  autoUpdate?: {
+    enabled?: boolean;
+    intervalHours?: number; // 自动更新间隔（小时），默认24小时
+    lastUpdateTime?: Date; // 上次更新时间
+  };
+};
+
+/**
  * AI提供商类型定义（扩展版）
  */
 export type AIProvider = {
@@ -181,6 +240,9 @@ export type AIProvider = {
   customConfig?: CustomAPIConfig;
   // 是否使用自定义配置（如果为false，使用内置的硬编码逻辑）
   useCustomConfig?: boolean;
+  
+  // 新增：API自动获取配置
+  autoFetchConfig?: APIAutoFetchConfig;
   
   // 预设配置类型（用于快速设置）
   presetType?: 'openai' | 'claude' | 'deepseek' | 'custom';

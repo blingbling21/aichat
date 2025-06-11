@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
+
 import {
   Dialog,
   DialogContent,
@@ -22,7 +22,7 @@ import {
 } from "@/components/ui/select";
 import { Plus, Trash2, ChevronDown, HelpCircle, Info } from 'lucide-react';
 import { toast } from 'sonner';
-import { AIProvider, CustomAPIConfig, APIHeaderConfig, APIBodyFieldConfig, MessageStructureConfig, APIQueryParamConfig } from '../types';
+import { AIProvider, CustomAPIConfig, APIHeaderConfig, APIBodyFieldConfig, MessageStructureConfig } from '../types';
 import { JsonStructureBuilder } from './JsonStructureBuilder';
 
 
@@ -95,18 +95,18 @@ const AdvancedProviderConfig: React.FC<AdvancedProviderConfigProps> = ({
     streamConfig: {
       enabled: false,
       requestType: 'body_field',
-      request: {
-        urlReplacement: {
-          from: 'generateContent',
-          to: 'streamGenerateContent'
-        }
-      },
-      response: {
+                request: {
+            urlReplacement: {
+              from: 'generateContent',
+              to: 'streamGenerateContent'
+            }
+          },
+          response: {
         format: 'sse',
-        dataPrefix: 'data: ',
-        contentPath: '',
-        finishCondition: '[DONE]'
-      }
+            dataPrefix: 'data: ',
+            contentPath: '',
+            finishCondition: '[DONE]'
+          }
     },
     response: {
       contentPath: ''
@@ -174,18 +174,20 @@ const AdvancedProviderConfig: React.FC<AdvancedProviderConfigProps> = ({
   };
 
   const addHeader = () => {
-    if (!config) return;
     setConfig({
       ...config,
-      headers: [...config.headers, { key: '', value: '' }]
+      headers: [...config.headers, { 
+        key: '', 
+        value: '', 
+        valueType: 'static'
+      }]
     });
   };
 
   const updateHeader = (index: number, field: keyof APIHeaderConfig, value: string) => {
-    if (!config) return;
-    const newHeaders = [...config.headers];
-    newHeaders[index] = { ...newHeaders[index], [field]: value };
-    setConfig({ ...config, headers: newHeaders });
+    const updatedHeaders = [...config.headers];
+    updatedHeaders[index] = { ...updatedHeaders[index], [field]: value };
+    setConfig({ ...config, headers: updatedHeaders });
   };
 
   const removeHeader = (index: number) => {
@@ -315,16 +317,8 @@ const AdvancedProviderConfig: React.FC<AdvancedProviderConfigProps> = ({
                         <div className="flex-1">
                           <Label>值类型</Label>
                           <Select
-                            value={header.valueTemplate ? 'template' : 'static'}
-                            onValueChange={(value) => {
-                              if (value === 'template') {
-                                updateHeader(index, 'valueTemplate', header.value || '');
-                                updateHeader(index, 'value', '');
-                              } else {
-                                updateHeader(index, 'value', header.valueTemplate || '');
-                                updateHeader(index, 'valueTemplate', '');
-                              }
-                            }}
+                            value={header.valueType}
+                            onValueChange={(value: 'static' | 'template') => updateHeader(index, 'valueType', value)}
                           >
                             <SelectTrigger>
                               <SelectValue />
@@ -346,11 +340,11 @@ const AdvancedProviderConfig: React.FC<AdvancedProviderConfigProps> = ({
                       </div>
                       
                       <div>
-                        {header.valueTemplate ? (
+                        {header.valueType === 'template' ? (
                           <div>
                             <Label>模板值</Label>
                             <Input
-                              value={header.valueTemplate}
+                              value={header.valueTemplate || ''}
                               onChange={(e) => updateHeader(index, 'valueTemplate', e.target.value)}
                               placeholder="如: Bearer {apiKey}"
                             />
@@ -362,7 +356,7 @@ const AdvancedProviderConfig: React.FC<AdvancedProviderConfigProps> = ({
                           <div>
                             <Label>固定值</Label>
                             <Input
-                              value={header.value}
+                              value={header.value || ''}
                               onChange={(e) => updateHeader(index, 'value', e.target.value)}
                               placeholder="如: application/json"
                             />
@@ -430,7 +424,7 @@ const AdvancedProviderConfig: React.FC<AdvancedProviderConfigProps> = ({
                           <Label>静态值</Label>
                           <Input
                                                     value={field.value?.toString() ?? ''}
-                        onChange={(e) => updateBodyField(index, 'value', e.target.value)}
+                            onChange={(e) => updateBodyField(index, 'value', e.target.value)}
                             placeholder="如: 0.7, true, gpt-4"
                           />
                         </div>
@@ -440,7 +434,7 @@ const AdvancedProviderConfig: React.FC<AdvancedProviderConfigProps> = ({
                           <Label>模板值</Label>
                           <Input
                                                     value={field.valueTemplate ?? ''}
-                        onChange={(e) => updateBodyField(index, 'valueTemplate', e.target.value)}
+                            onChange={(e) => updateBodyField(index, 'valueTemplate', e.target.value)}
                             placeholder="如: {model}, {stream}, {message}"
                           />
                         </div>
@@ -449,7 +443,7 @@ const AdvancedProviderConfig: React.FC<AdvancedProviderConfigProps> = ({
                         <Label>字段说明</Label>
                         <Input
                                                   value={field.description ?? ''}
-                        onChange={(e) => updateBodyField(index, 'description', e.target.value)}
+                          onChange={(e) => updateBodyField(index, 'description', e.target.value)}
                           placeholder="说明这个字段的作用"
                         />
                       </div>
@@ -502,13 +496,14 @@ const AdvancedProviderConfig: React.FC<AdvancedProviderConfigProps> = ({
                 <Checkbox
                   id="stream-enabled"
                   checked={config.streamConfig?.enabled || false}
-                  onCheckedChange={(checked) => setConfig({
+                  onCheckedChange={(checked) =>                   setConfig({
                     ...config,
                     streamConfig: {
                       enabled: checked === true,
                       requestType: config.streamConfig?.requestType || 'body_field',
                       request: config.streamConfig?.request || {},
                       response: {
+                        format: config.streamConfig?.response?.format || 'sse',
                         dataPrefix: config.streamConfig?.response?.dataPrefix || 'data: ',
                         contentPath: config.streamConfig?.response?.contentPath || '',
                         finishCondition: config.streamConfig?.response?.finishCondition || '[DONE]'
@@ -581,13 +576,13 @@ const AdvancedProviderConfig: React.FC<AdvancedProviderConfigProps> = ({
                             value={config.streamConfig?.request?.bodyFieldPath ?? ''}
                             onChange={(e) => setConfig({
                               ...config,
-                              streamConfig: {
-                                ...config.streamConfig!,
+                              streamConfig: config.streamConfig ? {
+                                ...config.streamConfig,
                                 request: {
                                   ...config.streamConfig.request,
                                   bodyFieldPath: e.target.value
                                 }
-                              }
+                              } : undefined
                             })}
                             placeholder="stream"
                             className="h-8 text-xs"
@@ -599,13 +594,13 @@ const AdvancedProviderConfig: React.FC<AdvancedProviderConfigProps> = ({
                             value={String(config.streamConfig?.request?.bodyFieldValue ?? '')}
                             onChange={(e) => setConfig({
                               ...config,
-                              streamConfig: {
-                                ...config.streamConfig!,
+                              streamConfig: config.streamConfig ? {
+                                ...config.streamConfig,
                                 request: {
                                   ...config.streamConfig.request,
                                   bodyFieldValue: e.target.value === 'true' ? true : e.target.value === 'false' ? false : e.target.value
                                 }
-                              }
+                              } : undefined
                             })}
                             placeholder="true"
                             className="h-8 text-xs"
@@ -625,7 +620,7 @@ const AdvancedProviderConfig: React.FC<AdvancedProviderConfigProps> = ({
                               streamConfig: {
                                 ...config.streamConfig!,
                                 request: {
-                                  ...config.streamConfig.request,
+                                  ...(config.streamConfig?.request || {}),
                                   urlReplacement: {
                                     from: e.target.value,
                                     to: config.streamConfig?.request?.urlReplacement?.to ?? ''
@@ -646,7 +641,7 @@ const AdvancedProviderConfig: React.FC<AdvancedProviderConfigProps> = ({
                               streamConfig: {
                                 ...config.streamConfig!,
                                 request: {
-                                  ...config.streamConfig.request,
+                                  ...(config.streamConfig?.request || {}),
                                   urlReplacement: {
                                     from: config.streamConfig?.request?.urlReplacement?.from ?? '',
                                     to: e.target.value
@@ -672,7 +667,7 @@ const AdvancedProviderConfig: React.FC<AdvancedProviderConfigProps> = ({
                               streamConfig: {
                                 ...config.streamConfig!,
                                 request: {
-                                  ...config.streamConfig.request,
+                                  ...(config.streamConfig?.request || {}),
                                   queryParamKey: e.target.value
                                 }
                               }
@@ -687,13 +682,13 @@ const AdvancedProviderConfig: React.FC<AdvancedProviderConfigProps> = ({
                             value={config.streamConfig?.request?.queryParamValue ?? ''}
                             onChange={(e) => setConfig({
                               ...config,
-                              streamConfig: {
-                                ...config.streamConfig!,
+                              streamConfig: config.streamConfig ? {
+                                ...config.streamConfig,
                                 request: {
                                   ...config.streamConfig.request,
                                   queryParamValue: e.target.value
                                 }
-                              }
+                              } : undefined
                             })}
                             placeholder="true"
                             className="h-8 text-xs"
@@ -713,13 +708,13 @@ const AdvancedProviderConfig: React.FC<AdvancedProviderConfigProps> = ({
                         value={config.streamConfig?.response?.format ?? 'sse'}
                         onValueChange={(value: 'sse' | 'json') => setConfig({
                           ...config,
-                          streamConfig: {
-                            ...config.streamConfig!,
+                          streamConfig: config.streamConfig ? {
+                            ...config.streamConfig,
                             response: {
-                              ...config.streamConfig.response!,
+                              ...config.streamConfig.response,
                               format: value
                             }
-                          }
+                          } : undefined
                         })}
                       >
                         <SelectTrigger className="h-8 text-xs">
@@ -743,7 +738,7 @@ const AdvancedProviderConfig: React.FC<AdvancedProviderConfigProps> = ({
                               streamConfig: {
                                 ...config.streamConfig!,
                                 response: {
-                                  ...config.streamConfig.response!,
+                                  ...(config.streamConfig?.response || { format: 'sse' as const, contentPath: '' }),
                                   dataPrefix: e.target.value
                                 }
                               }
@@ -762,7 +757,7 @@ const AdvancedProviderConfig: React.FC<AdvancedProviderConfigProps> = ({
                             streamConfig: {
                               ...config.streamConfig!,
                               response: {
-                                ...config.streamConfig.response!,
+                                ...(config.streamConfig?.response || { format: 'sse', contentPath: '' }),
                                 finishCondition: e.target.value
                               }
                             }
@@ -782,7 +777,7 @@ const AdvancedProviderConfig: React.FC<AdvancedProviderConfigProps> = ({
                           streamConfig: {
                             ...config.streamConfig!,
                             response: {
-                              ...config.streamConfig.response!,
+                              ...(config.streamConfig?.response || { format: 'sse', contentPath: '' }),
                               contentPath: e.target.value
                             }
                           }
@@ -801,7 +796,7 @@ const AdvancedProviderConfig: React.FC<AdvancedProviderConfigProps> = ({
                           streamConfig: {
                             ...config.streamConfig!,
                             response: {
-                              ...config.streamConfig.response!,
+                              ...(config.streamConfig?.response || { format: 'sse' as const, contentPath: '' }),
                               reasoningPath: e.target.value
                             }
                           }
