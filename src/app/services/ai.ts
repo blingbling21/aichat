@@ -2,6 +2,7 @@ import { AIProvider, Message, ProxySettings, Agent, SceneParticipant, SceneMessa
 import { storageService } from './storage';
 import { logService } from './log';
 import { httpService } from './http';
+import { mcpService } from './mcp';
 
 /**
  * AI响应结果类型
@@ -18,6 +19,106 @@ type AIResponse = {
 class AIService {
   // 保存当前的请求控制器，用于取消请求
   private currentStreamController: AbortController | null = null;
+  private mcpInitialized: boolean = false;
+
+  constructor() {
+    // 初始化MCP服务
+    this.initializeMCP();
+  }
+
+  /**
+   * 初始化MCP服务
+   */
+  private async initializeMCP() {
+    if (this.mcpInitialized) return;
+    
+    try {
+      await mcpService.initializeServers();
+      this.mcpInitialized = true;
+      logService.info('MCP服务初始化完成');
+    } catch (error) {
+      logService.error('MCP服务初始化失败', error);
+    }
+  }
+
+  /**
+   * 获取可用的MCP工具列表，格式化为OpenAI Function Calling格式
+   */
+  private getMCPToolsForFunctionCalling() {
+    const mcpTools = mcpService.getAvailableTools();
+    
+    return mcpTools.map(tool => ({
+      type: 'function',
+      function: {
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.inputSchema
+      }
+    }));
+  }
+
+  /**
+   * 处理AI模型的工具调用请求
+   */
+  private async handleToolCalls(toolCalls: Array<{
+    function: {
+      name: string;
+      arguments: string | Record<string, unknown>;
+    };
+  }>): Promise<string> {
+    const results: string[] = [];
+    
+    for (const toolCall of toolCalls) {
+      try {
+        const functionName = toolCall.function.name;
+        const functionArgs = typeof toolCall.function.arguments === 'string' 
+          ? JSON.parse(toolCall.function.arguments) 
+          : toolCall.function.arguments;
+
+        logService.info(`处理工具调用: ${functionName}`);
+
+        // 查找对应的MCP服务器
+        const availableTools = mcpService.getAvailableTools();
+        const tool = availableTools.find(t => t.name === functionName);
+        
+        if (!tool) {
+          results.push(`错误：找不到工具 ${functionName}`);
+          continue;
+        }
+
+        // 找到提供该工具的服务器
+        const serverStatuses = mcpService.getServerStatuses();
+        let serverId = '';
+        
+        for (const status of serverStatuses) {
+          if (status.connected && status.capabilities?.tools?.some(t => t.name === functionName)) {
+            serverId = status.id;
+            break;
+          }
+        }
+
+        if (!serverId) {
+          results.push(`错误：找不到提供工具 ${functionName} 的服务器`);
+          continue;
+        }
+
+        // 调用MCP工具
+        const result = await mcpService.callTool(serverId, functionName, functionArgs as Record<string, unknown>);
+        
+        if (result.success) {
+          results.push(`工具 ${functionName} 执行成功：${result.content || ''}`);
+        } else {
+          results.push(`工具 ${functionName} 执行失败：${result.error || '未知错误'}`);
+        }
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : '未知错误';
+        results.push(`工具调用错误：${errorMessage}`);
+        logService.error('工具调用失败', error);
+      }
+    }
+    
+    return results.join('\n\n');
+  }
 
   /**
    * 确保消息历史符合模型要求的格式
@@ -330,7 +431,7 @@ class AIService {
     };
 
     for (const headerConfig of config.headers) {
-      let headerValue: string = headerConfig.value;
+      let headerValue: string = headerConfig.value || '';
       
       // 处理模板
       if (headerConfig.valueTemplate) {
@@ -381,6 +482,23 @@ class AIService {
         const streamValue = config.streamConfig.request.bodyFieldValue ?? true;
         this.setNestedValue(body, config.streamConfig.request.bodyFieldPath, streamValue);
         logService.info(`🌊 添加流式请求体字段: ${config.streamConfig.request.bodyFieldPath}=${streamValue}`);
+      }
+      
+      // 🔧 添加MCP工具支持
+      if (this.mcpInitialized) {
+        const mcpTools = this.getMCPToolsForFunctionCalling();
+        if (mcpTools.length > 0) {
+          // 检查是否已经有tools字段配置
+          const hasToolsField = config.bodyFields.some(field => 
+            field.path === 'tools' || field.path.endsWith('.tools')
+          );
+          
+          if (!hasToolsField) {
+            // 如果没有配置tools字段，自动添加
+            this.setNestedValue(body, 'tools', mcpTools);
+            logService.info(`🔧 自动添加MCP工具: ${mcpTools.length} 个工具`);
+          }
+        }
       }
       
       logService.info(`请求体字段: ${Object.keys(body).join(', ')}`);
@@ -782,6 +900,36 @@ class AIService {
 
     const data = JSON.parse(httpResponse.body);
     logService.info(`收到非流式响应: ${JSON.stringify(data)}`);
+    
+    // 检查是否有工具调用
+    const toolCalls = this.getNestedValue(data, 'choices[0].message.tool_calls') || 
+                     this.getNestedValue(data, 'message.tool_calls');
+    
+    if (toolCalls && Array.isArray(toolCalls) && toolCalls.length > 0) {
+      logService.info(`检测到工具调用: ${toolCalls.length} 个工具`);
+      
+      // 处理工具调用
+      const toolResults = await this.handleToolCalls(toolCalls);
+      
+      // 将工具调用结果作为新的用户消息，重新发送请求
+      const newHistory = [...(history || []), 
+        { role: 'user' as const, content: message },
+        { role: 'assistant' as const, content: JSON.stringify({ tool_calls: toolCalls }) },
+        { role: 'user' as const, content: `工具调用结果:\n${toolResults}` }
+      ];
+      
+      logService.info('重新发送请求以处理工具调用结果');
+      return this.callCustomAPI(
+        '请基于上述工具调用结果回答用户的问题。',
+        provider,
+        proxySettings,
+        newHistory,
+        modelId,
+        isStream,
+        systemPrompt,
+        temperature
+      );
+    }
     
     const extractedContent = this.extractResponseContent(data, provider.customConfig.response);
     logService.info(`提取的内容: "${extractedContent}"`);
@@ -1536,7 +1684,7 @@ class AIService {
                 }
                 
                 // 提取推理内容
-                const reasoningPath = streamConfig?.reasoningPath || provider.customConfig?.response.reasoningPath;
+                const reasoningPath = provider.customConfig?.response.reasoningPath;
                 if (reasoningPath) {
                   const reasoningContent = this.getNestedValue(jsonData, reasoningPath);
                   if (reasoningContent) {

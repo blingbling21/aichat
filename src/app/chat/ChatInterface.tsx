@@ -555,7 +555,7 @@ const ChatInterface: FC = () => {
     if (!provider || !provider.customConfig) {
       return false;
     }
-    return provider.customConfig.response.streamConfig?.enabled || false;
+    return provider.customConfig.streamConfig?.enabled || false;
   };
 
   // 检查当前提供商是否配置了温度模板字段

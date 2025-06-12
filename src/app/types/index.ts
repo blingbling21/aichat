@@ -385,4 +385,112 @@ export type MessageStructureConfig = {
     generatedTemplate: string;
     sampleOutput: string;
   };
+};
+
+/**
+ * MCP相关类型定义
+ */
+
+/**
+ * MCP工具参数定义
+ */
+export type MCPToolParameter = {
+  type: 'string' | 'number' | 'boolean' | 'object' | 'array';
+  description?: string;
+  required?: boolean;
+  properties?: Record<string, MCPToolParameter>;
+  items?: MCPToolParameter;
+};
+
+/**
+ * MCP工具定义
+ */
+export type MCPTool = {
+  name: string;
+  description: string;
+  inputSchema: {
+    type: 'object';
+    properties: Record<string, MCPToolParameter>;
+    required?: string[];
+  };
+};
+
+/**
+ * MCP资源定义
+ */
+export type MCPResource = {
+  uri: string;
+  name: string;
+  description?: string;
+  mimeType?: string;
+};
+
+/**
+ * MCP提示定义
+ */
+export type MCPPrompt = {
+  name: string;
+  description: string;
+  arguments?: {
+    name: string;
+    description: string;
+    required?: boolean;
+  }[];
+};
+
+/**
+ * MCP服务器配置
+ */
+export type MCPServerConfig = {
+  id: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  type: 'builtin' | 'external';
+  
+  // 内置服务器配置
+  serverClass?: string;
+  
+  // 外部服务器配置
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  
+  // 服务器能力
+  capabilities: {
+    tools?: boolean;
+    resources?: boolean;
+    prompts?: boolean;
+  };
+  
+  // 权限设置
+  permissions: {
+    allowToolExecution?: boolean;
+    allowResourceAccess?: boolean;
+    allowedDomains?: string[];
+  };
+};
+
+/**
+ * MCP调用结果
+ */
+export type MCPToolResult = {
+  success: boolean;
+  content?: string;
+  error?: string;
+  metadata?: Record<string, unknown>;
+};
+
+/**
+ * MCP服务器状态
+ */
+export type MCPServerStatus = {
+  id: string;
+  connected: boolean;
+  lastError?: string;
+  capabilities?: {
+    tools?: MCPTool[];
+    resources?: MCPResource[];
+    prompts?: MCPPrompt[];
+  };
 }; 

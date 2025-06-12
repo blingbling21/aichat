@@ -1,3 +1,5 @@
+"use client";
+
 import { invoke } from "@tauri-apps/api/core";
 
 /**
@@ -23,7 +25,15 @@ class LogService {
    * ```
    */
   async info(message: string): Promise<void> {
-    await invoke("log_info", { message });
+    if (typeof window !== 'undefined') {
+      try {
+        await invoke("log_info", { message });
+      } catch {
+        console.info(`[INFO] ${message}`);
+      }
+    } else {
+      console.info(`[INFO] ${message}`);
+    }
   }
 
   /**
@@ -40,7 +50,15 @@ class LogService {
    * ```
    */
   async warn(message: string): Promise<void> {
-    await invoke("log_warn", { message });
+    if (typeof window !== 'undefined') {
+      try {
+        await invoke("log_warn", { message });
+      } catch {
+        console.warn(`[WARN] ${message}`);
+      }
+    } else {
+      console.warn(`[WARN] ${message}`);
+    }
   }
 
   /**
@@ -69,7 +87,15 @@ class LogService {
       }`;
     }
 
-    await invoke("log_error", { message: fullMessage });
+    if (typeof window !== 'undefined') {
+      try {
+        await invoke("log_error", { message: fullMessage });
+      } catch {
+        console.error(`[ERROR] ${fullMessage}`);
+      }
+    } else {
+      console.error(`[ERROR] ${fullMessage}`);
+    }
   }
 
   /**
@@ -86,7 +112,15 @@ class LogService {
    * ```
    */
   async debug(message: string): Promise<void> {
-    await invoke("log_debug", { message });
+    if (typeof window !== 'undefined') {
+      try {
+        await invoke("log_debug", { message });
+      } catch {
+        console.debug(`[DEBUG] ${message}`);
+      }
+    } else {
+      console.debug(`[DEBUG] ${message}`);
+    }
   }
 }
 

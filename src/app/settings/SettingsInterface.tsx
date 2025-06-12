@@ -23,6 +23,7 @@ import { toast } from "sonner";
 import AdvancedProviderConfig from '../components/AdvancedProviderConfig';
 import APIAutoFetchConfig from '../components/APIAutoFetchConfig';
 import BalanceAPIConfig from '../components/BalanceAPIConfig';
+import MCPSettings from '../components/MCPSettings';
 import {
   Select,
   SelectContent,
@@ -865,7 +866,15 @@ const SettingsInterface: FC = () => {
         </CardContent>
       </Card>
       
-
+      {/* MCP工具设置 */}
+      <Card className="mb-8">
+        <CardHeader>
+          <CardTitle>MCP工具</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <MCPSettings />
+        </CardContent>
+      </Card>
       
       {/* 删除确认对话框 */}
       <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>

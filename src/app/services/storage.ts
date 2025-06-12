@@ -1,4 +1,4 @@
-import { AIProvider, ProxySettings, Agent, AgentSession, Scene, SceneSession } from '../types';
+import { AIProvider, ProxySettings, Agent, AgentSession, Scene, SceneSession, MCPServerConfig } from '../types';
 import { logService } from './log';
 
 /**
@@ -17,6 +17,7 @@ class StorageService {
   private readonly agentSessionsKey = 'aiAgentSessions';
   private readonly scenesKey = 'aiScenes';
   private readonly sceneSessionsKey = 'aiSceneSessions';
+  private readonly mcpConfigsKey = 'mcpServerConfigs';
 
   /**
    * 获取AI提供商列表
@@ -582,6 +583,65 @@ class StorageService {
       logService.info(`删除场景 ID ${sceneId} 的所有会话`);
     } catch (error) {
       logService.error(`删除场景 ID ${sceneId} 的会话失败:`, error);
+    }
+  }
+
+  /**
+   * 获取MCP服务器配置
+   */
+  getMCPServerConfigs(): MCPServerConfig[] | null {
+    try {
+      if (!isBrowser) return null;
+      
+      const configs = localStorage.getItem(this.mcpConfigsKey);
+      if (!configs) return null;
+      
+      return JSON.parse(configs);
+    } catch (error) {
+      logService.error('获取MCP服务器配置失败:', error);
+      return null;
+    }
+  }
+
+  /**
+   * 保存MCP服务器配置
+   */
+  saveMCPServerConfigs(configs: MCPServerConfig[]): void {
+    try {
+      if (!isBrowser) return;
+      
+      localStorage.setItem(this.mcpConfigsKey, JSON.stringify(configs));
+      logService.info(`保存MCP服务器配置，共 ${configs.length} 个`);
+    } catch (error) {
+      logService.error('保存MCP服务器配置失败:', error);
+    }
+  }
+
+  /**
+   * 获取温度设置
+   */
+  getTemperature(): number {
+    try {
+      if (!isBrowser) return 0;
+      
+      const temp = localStorage.getItem('temperature');
+      return temp ? parseFloat(temp) : 0;
+    } catch (error) {
+      logService.error('获取温度设置失败:', error);
+      return 0;
+    }
+  }
+
+  /**
+   * 保存温度设置
+   */
+  saveTemperature(temperature: number): void {
+    try {
+      if (!isBrowser) return;
+      
+      localStorage.setItem('temperature', temperature.toString());
+    } catch (error) {
+      logService.error('保存温度设置失败:', error);
     }
   }
 }
