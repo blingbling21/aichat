@@ -40,3 +40,7 @@ tokio = { version = "1.45", features = ["full"] }
 url = "2.0"
 # 异步流处理工具
 futures-util = "0.3"
+# 正则表达式库
+regex = "1.0"
+# 日期时间处理库
+chrono = "0.4"

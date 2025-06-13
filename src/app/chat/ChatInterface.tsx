@@ -46,12 +46,33 @@ const ChatInterface: FC = () => {
   // 智能滚动状态
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
   
+  // 工具调用状态
+  const [toolCallStatus, setToolCallStatus] = useState<string>('');
+  const [isToolCalling, setIsToolCalling] = useState(false);
+  const [toolCallingMessageId, setToolCallingMessageId] = useState<string>('');
+  
+  // 使用 useRef 存储最新的工具状态，避免闭包陷阱
+  const toolStateRef = useRef({
+    isToolCalling: false,
+    toolCallStatus: '',
+    toolCallingMessageId: ''
+  });
+  
   // 聊天容器引用，用于自动滚动
   const messagesEndRef = useRef<HTMLDivElement>(null);
   // 消息容器引用，用于监听滚动事件
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   // 输入框引用，用于自动调整高度
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // 同步更新 toolStateRef，避免闭包陷阱
+  useEffect(() => {
+    toolStateRef.current = {
+      isToolCalling,
+      toolCallStatus,
+      toolCallingMessageId
+    };
+  }, [isToolCalling, toolCallStatus, toolCallingMessageId]);
 
   // 加载本地存储的数据，确保在客户端执行
   useEffect(() => {
@@ -320,8 +341,62 @@ const ChatInterface: FC = () => {
     aiService.cancelStream();
   };
 
+  // 监听状态栏文本变化并打印日志
+  useEffect(() => {
+    const lastMessage = messages[messages.length - 1];
+    if (lastMessage && lastMessage.role === 'assistant') {
+      let statusText = formatTime(lastMessage.timestamp);
+      
+      // 构建完整的状态栏文本
+      // 优先级：工具调用 > 流式生成 > 耗时显示
+      if (lastMessage.streaming) {
+        statusText += ' · 正在生成...';
+      } else if (lastMessage.role === 'assistant' && lastMessage.generationDuration && !lastMessage.streaming) {
+        const durationText = lastMessage.generationDuration >= 1000 
+          ? `${(lastMessage.generationDuration / 1000).toFixed(1)}s` 
+          : `${lastMessage.generationDuration}ms`;
+        statusText += ` · 耗时 ${durationText}`;
+      }
+      
+      // 工具调用状态覆盖其他状态（如果存在）
+      if (isToolCalling && lastMessage.id === toolCallingMessageId && toolCallStatus) {
+        statusText = formatTime(lastMessage.timestamp) + ` · ${toolCallStatus}`;
+      }
+      
+      // 取消状态
+      if (lastMessage.canceled) {
+        statusText += ' · 已中断';
+      }
+      
+      // 打印状态栏文本变化
+      logService.info(`[状态栏显示] ${statusText}`);
+      logService.info(`[状态栏调试] isToolCalling=${isToolCalling}, toolCallingMessageId=${toolCallingMessageId}, toolCallStatus="${toolCallStatus}", message.id=${lastMessage.id}, streaming=${lastMessage.streaming}, generationDuration=${lastMessage.generationDuration}`);
+    }
+  }, [messages, isToolCalling, toolCallingMessageId, toolCallStatus]);
+
   // 流式消息更新处理函数
   const handleStreamUpdate = (assistantMessageId: string, content: string, done: boolean, error?: boolean, reasoningContent?: string) => {
+    // 检测是否是工具调用提示
+    const isToolCallMessage = content.includes('🔧') || content.includes('⚙️') || content.includes('✅');
+    
+    // 使用 ref 获取最新的工具状态，避免闭包陷阱
+    const currentToolState = toolStateRef.current;
+    
+    logService.info(`[DEBUG] handleStreamUpdate: messageId=${assistantMessageId}, content="${content.substring(0, 50)}...", done=${done}, isToolCallMessage=${isToolCallMessage}`);
+    logService.info(`[DEBUG] Current state: isToolCalling=${currentToolState.isToolCalling}, toolCallingMessageId=${currentToolState.toolCallingMessageId}, toolCallStatus="${currentToolState.toolCallStatus}"`);
+    
+    if (isToolCallMessage) {
+      // 如果是工具调用提示，更新工具调用状态而不是消息内容
+      logService.info(`[工具状态变化] 当前状态: "${currentToolState.toolCallStatus}" -> 新状态: "${content}"`);
+      setToolCallStatus(content);
+      setIsToolCalling(true);
+      setToolCallingMessageId(assistantMessageId);
+      return; // 不更新消息内容
+    }
+    
+    // 在最终回复完成时清除工具调用状态  
+    logService.info(`[工具状态检查] isToolCalling=${currentToolState.isToolCalling}, isToolCallMessage=${isToolCallMessage}, done=${done}, content="${content.trim()}", assistantMessageId=${assistantMessageId}, toolCallingMessageId=${currentToolState.toolCallingMessageId}, 匹配=${assistantMessageId === currentToolState.toolCallingMessageId}`);
+    
     setMessages(prevMessages => {
       return prevMessages.map(msg => {
         if (msg.id === assistantMessageId) {
@@ -337,11 +412,25 @@ const ChatInterface: FC = () => {
           if (done && msg.generationStartTime) {
             generationEndTime = new Date();
             generationDuration = generationEndTime.getTime() - msg.generationStartTime.getTime();
+            
+            // 在计算完耗时后，清除工具调用状态（使用最新状态）
+            if (currentToolState.isToolCalling && !isToolCallMessage && content.trim() !== '') {
+              logService.info(`[工具状态变化] 清除工具调用状态: "${currentToolState.toolCallStatus}" -> "" (最终回复到达)`);
+              setTimeout(() => {
+                logService.info(`[工具状态变化] 执行延迟清除: isToolCalling=false, toolCallStatus="", toolCallingMessageId=""`);
+                setIsToolCalling(false);
+                setToolCallStatus('');
+                setToolCallingMessageId('');
+              }, 0);
             }
+          }
+          
+          // 只有在非工具调用提示时才更新内容
+          const newContent = isToolCallMessage ? msg.content : content;
           
           return {
             ...msg,
-            content: content,
+            content: newContent,
             reasoningContent: reasoningContent !== undefined ? reasoningContent : msg.reasoningContent,
             streaming: !done,
             reasoningCollapsed,
@@ -760,7 +849,7 @@ const ChatInterface: FC = () => {
                               ? 'canceled-message' 
                               : ''}
                         />
-                      ) : message.streaming ? (
+                      ) : (message.streaming || (isToolCalling && message.id === toolCallingMessageId)) ? (
                         <div className="h-5 w-5">
                           <Loader2 className="h-5 w-5 animate-spin text-gray-500" />
                         </div>
@@ -775,15 +864,30 @@ const ChatInterface: FC = () => {
               </Card>
               <span className="text-xs text-gray-500 mt-1">
                 {formatTime(message.timestamp)}
-                {message.streaming && ' · 正在生成...'}
+                {/* 状态显示逻辑 */}
+                {(() => {
+                  // 工具调用状态优先显示
+                  if (isToolCalling && message.id === toolCallingMessageId && toolCallStatus) {
+                    return ` · ${toolCallStatus}`;
+                  }
+                  // 流式生成状态
+                  else if (message.streaming) {
+                    return ' · 正在生成...';
+                  }
+                  // 耗时显示
+                  else if (message.role === 'assistant' && message.generationDuration && !message.streaming) {
+                    return (
+                      <span className="ml-2 text-blue-500">
+                        · 耗时 {message.generationDuration >= 1000 
+                          ? `${(message.generationDuration / 1000).toFixed(1)}s` 
+                          : `${message.generationDuration}ms`}
+                      </span>
+                    );
+                  }
+                  return '';
+                })()}
+                {/* 取消状态 */}
                 {message.canceled && ' · 已中断'}
-                {message.role === 'assistant' && message.generationDuration && !message.streaming && (
-                  <span className="ml-2 text-blue-500">
-                    · 耗时 {message.generationDuration >= 1000 
-                      ? `${(message.generationDuration / 1000).toFixed(1)}s` 
-                      : `${message.generationDuration}ms`}
-                  </span>
-                )}
               </span>
             </div>
           ))

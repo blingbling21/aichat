@@ -22,22 +22,35 @@ class AIService {
   private mcpInitialized: boolean = false;
 
   constructor() {
-    // 初始化MCP服务
-    this.initializeMCP();
+    // 初始化MCP服务（异步）
+    this.initializeMCP().catch(error => {
+      logService.error('构造函数中MCP初始化失败', error);
+    });
   }
 
   /**
    * 初始化MCP服务
    */
   private async initializeMCP() {
-    if (this.mcpInitialized) return;
+    if (this.mcpInitialized) {
+      logService.info('MCP服务已经初始化，跳过');
+      return;
+    }
     
     try {
+      logService.info('开始初始化MCP服务...');
       await mcpService.initializeServers();
       this.mcpInitialized = true;
-      logService.info('MCP服务初始化完成');
+      logService.info('✅ MCP服务初始化完成');
+      
+      // 验证工具是否可用
+      const tools = mcpService.getAvailableTools();
+      logService.info(`✅ 可用MCP工具数量: ${tools.length}`);
+      tools.forEach(tool => {
+        logService.info(`  - ${tool.name}: ${tool.description}`);
+      });
     } catch (error) {
-      logService.error('MCP服务初始化失败', error);
+      logService.error('❌ MCP服务初始化失败', error);
     }
   }
 
@@ -213,6 +226,12 @@ class AIService {
     temperature?: number
   ): Promise<Message> {
     try {
+      // 确保MCP服务已初始化
+      if (!this.mcpInitialized) {
+        logService.info('MCP服务未初始化，正在初始化...');
+        await this.initializeMCP();
+      }
+      
       // 获取选中的提供商
       const id = providerId || storageService.getSelectedProviderId();
       const providers = storageService.getProviders();
@@ -280,6 +299,12 @@ class AIService {
     modelId?: string,
     temperature?: number
   ): Promise<void> {
+    // 确保MCP服务已初始化
+    if (!this.mcpInitialized) {
+      logService.info('MCP服务未初始化，正在初始化...');
+      await this.initializeMCP();
+    }
+    
     // 如果有正在进行的请求，先取消
     if (this.currentStreamController) {
       this.currentStreamController.abort();
@@ -487,6 +512,8 @@ class AIService {
       // 🔧 添加MCP工具支持
       if (this.mcpInitialized) {
         const mcpTools = this.getMCPToolsForFunctionCalling();
+        logService.info(`🔧 MCP工具状态: 初始化=${this.mcpInitialized}, 工具数量=${mcpTools.length}`);
+        
         if (mcpTools.length > 0) {
           // 检查是否已经有tools字段配置
           const hasToolsField = config.bodyFields.some(field => 
@@ -497,8 +524,15 @@ class AIService {
             // 如果没有配置tools字段，自动添加
             this.setNestedValue(body, 'tools', mcpTools);
             logService.info(`🔧 自动添加MCP工具: ${mcpTools.length} 个工具`);
+            logService.info(`🔧 工具详情: ${JSON.stringify(mcpTools, null, 2)}`);
+          } else {
+            logService.info(`🔧 已有tools字段配置，跳过自动添加`);
           }
+        } else {
+          logService.warn(`🔧 没有可用的MCP工具`);
         }
+      } else {
+        logService.warn(`🔧 MCP服务未初始化`);
       }
       
       logService.info(`请求体字段: ${Object.keys(body).join(', ')}`);
@@ -905,8 +939,10 @@ class AIService {
     const toolCalls = this.getNestedValue(data, 'choices[0].message.tool_calls') || 
                      this.getNestedValue(data, 'message.tool_calls');
     
+    logService.info(`🔍 工具调用检测: toolCalls=${JSON.stringify(toolCalls)}`);
+    
     if (toolCalls && Array.isArray(toolCalls) && toolCalls.length > 0) {
-      logService.info(`检测到工具调用: ${toolCalls.length} 个工具`);
+      logService.info(`✅ 检测到工具调用: ${toolCalls.length} 个工具`);
       
       // 处理工具调用
       const toolResults = await this.handleToolCalls(toolCalls);
@@ -1634,6 +1670,15 @@ class AIService {
     // 初始化变量用于累积响应
     let fullResponse = '';
     let reasoningFullResponse = '';
+    const toolCallsAccumulator: Array<{
+      id: string;
+      type: string;
+      function: {
+        name: string;
+        arguments: string;
+      };
+    }> = [];
+    let isToolCallComplete = false;
     const streamConfig = provider.customConfig.streamConfig?.response;
 
     // ===== 🔧 调试日志：检查流式配置 =====
@@ -1651,14 +1696,10 @@ class AIService {
       body: options.body as string,
       proxySettings: proxySettings.enabled ? proxySettings : undefined,
       onData: (chunk: string) => {
-        logService.info(`🔍 收到流式数据块 (${chunk.length} chars): ${chunk.substring(0, 200)}${chunk.length > 200 ? '...' : ''}`);
-        
         // 根据用户配置的格式解析流式响应
         // 修复：如果没有format字段或者数据看起来像SSE，则使用SSE解析
         const isSSEFormat = streamConfig?.format === 'sse' || 
                            (!streamConfig?.format && chunk.includes('data:'));
-        
-        logService.info(`🔧 判断格式: streamConfig?.format="${streamConfig?.format}", isSSEFormat=${isSSEFormat}`);
         
         if (isSSEFormat) {
           // 处理SSE格式数据
@@ -1668,7 +1709,7 @@ class AIService {
             .filter(line => line.trim() !== '' && 
                     line.trim() !== `data: ${streamConfig?.finishCondition || '[DONE]'}`);
           
-          logService.info(`📝 SSE格式，解析出 ${lines.length} 行数据`);
+
           
           for (const line of lines) {
             if (line.startsWith(dataPrefix)) {
@@ -1676,20 +1717,118 @@ class AIService {
                 const jsonStr = line.slice(dataPrefix.length);
                 const jsonData = JSON.parse(jsonStr);
                 
-                // 提取增量内容
-                const content = this.getNestedValue(jsonData, streamConfig!.contentPath);
-                if (content) {
-                  fullResponse += String(content);
-                  onUpdate(fullResponse, false);
+                // 检查是否有工具调用
+                const toolCalls = this.getNestedValue(jsonData, 'choices[0].delta.tool_calls') || 
+                                 this.getNestedValue(jsonData, 'delta.tool_calls');
+                
+                if (toolCalls && Array.isArray(toolCalls)) {
+                  logService.info(`🔧 SSE检测到工具调用数据: ${JSON.stringify(toolCalls)}`);
+                  
+                  // 如果是第一次检测到工具调用，立即显示提示信息
+                  if (toolCallsAccumulator.length === 0) {
+                    onUpdate('🔧 AI正在调用工具处理您的请求，请稍候...', false);
+                  }
+                  
+                  // 累积工具调用数据
+                  for (const toolCall of toolCalls) {
+                    if (toolCall.index !== undefined) {
+                      if (!toolCallsAccumulator[toolCall.index]) {
+                        toolCallsAccumulator[toolCall.index] = {
+                          id: toolCall.id || '',
+                          type: toolCall.type || 'function',
+                          function: {
+                            name: '',
+                            arguments: ''
+                          }
+                        };
+                      }
+                      
+                      if (toolCall.function?.name) {
+                        toolCallsAccumulator[toolCall.index].function.name = toolCall.function.name;
+                        // 更新提示信息，显示具体的工具名称
+                        const toolName = toolCall.function.name;
+                        onUpdate(`🔧 AI正在使用工具 "${toolName}" 处理您的请求，请稍候...`, false);
+                      }
+                      if (toolCall.function?.arguments) {
+                        toolCallsAccumulator[toolCall.index].function.arguments += toolCall.function.arguments;
+                      }
+                    }
+                  }
                 }
                 
-                // 提取推理内容
-                const reasoningPath = provider.customConfig?.response.reasoningPath;
-                if (reasoningPath) {
-                  const reasoningContent = this.getNestedValue(jsonData, reasoningPath);
-                  if (reasoningContent) {
-                    reasoningFullResponse += String(reasoningContent);
-                    onUpdate(fullResponse, false, false, reasoningFullResponse);
+                // 检查是否完成工具调用
+                const finishReason = this.getNestedValue(jsonData, 'choices[0].finish_reason');
+                if (finishReason === 'tool_calls' && toolCallsAccumulator.length > 0) {
+                  logService.info(`🔧 SSE工具调用完成，开始处理 ${toolCallsAccumulator.length} 个工具`);
+                  isToolCallComplete = true;
+                  
+                  // 显示工具执行提示
+                  const toolNames = toolCallsAccumulator.map(tc => tc.function.name).filter(name => name).join('、');
+                  onUpdate(`⚙️ 正在执行工具：${toolNames}...`, false);
+                  
+                  // 异步处理工具调用
+                  (async () => {
+                    try {
+                      const toolResults = await this.handleToolCalls(toolCallsAccumulator);
+                      
+                      // 显示工具执行完成提示
+                      onUpdate(`✅ 工具执行完成，正在生成回复...`, false);
+                      
+                      // 将工具调用结果作为新的消息，重新发送流式请求
+                      // 注意：history已经包含了当前用户消息，所以不需要重复添加message
+                      const newHistory = [...(history || []), 
+                        { role: 'assistant' as const, content: JSON.stringify({ tool_calls: toolCallsAccumulator }) },
+                        { role: 'user' as const, content: `工具调用结果:\n${toolResults}` }
+                      ];
+                      
+                      logService.info('🔄 SSE重新发送流式请求以处理工具调用结果');
+                      
+                      // 创建包装的onUpdate回调，过滤工具调用提示，确保使用一致的状态管理
+                      const wrappedOnUpdate = (content: string, done: boolean, error?: boolean, reasoningContent?: string) => {
+                        // 过滤掉新请求中的工具调用提示，但允许最终完成状态通过
+                        const isNewToolCallMessage = content.includes('🔧') || content.includes('⚙️') || content.includes('✅');
+                        if (!isNewToolCallMessage || done) {
+                          // 转发非工具调用的内容更新，或者最终完成状态
+                          onUpdate(content, done, error, reasoningContent);
+                        }
+                      };
+                      
+                      // 递归调用流式API处理工具调用结果
+                      await this.streamCustomAPI(
+                        '请基于上述工具调用结果回答用户的问题。',
+                        provider,
+                        proxySettings,
+                        wrappedOnUpdate,
+                        abortSignal,
+                        newHistory,
+                        modelId,
+                        temperature
+                      );
+                    } catch (error) {
+                      logService.error('SSE工具调用处理失败', error);
+                      onUpdate(`❌ 工具调用处理失败: ${error}`, true, true);
+                    }
+                  })();
+                  return; // 停止当前流式处理
+                }
+                
+                // 如果不是工具调用，正常处理内容
+                if (!isToolCallComplete) {
+                  // 提取增量内容
+                  const content = this.getNestedValue(jsonData, streamConfig!.contentPath);
+                  if (content) {
+                    fullResponse += String(content);
+                    onUpdate(fullResponse, false);
+                  }
+                  
+                  // 提取推理内容
+                  const reasoningPath = provider.customConfig?.response.reasoningPath;
+                  if (reasoningPath) {
+                    const reasoningContent = this.getNestedValue(jsonData, reasoningPath);
+                    if (reasoningContent) {
+                      reasoningFullResponse += String(reasoningContent);
+                      onUpdate(fullResponse, false, false, reasoningFullResponse);
+                    }
                   }
                 }
               } catch (e) {
@@ -1699,7 +1838,6 @@ class AIService {
           }
         } else {
           // 处理JSON数组格式（如Gemini）
-          logService.info(`📝 JSON数组格式，数据块长度: ${chunk.length}`);
           
           try {
             // 尝试处理JSON数组中的对象
@@ -1725,27 +1863,123 @@ class AIService {
               }
             }
             
-            logService.info(`📦 解析出 ${jsonObjects.length} 个JSON对象`);
+
             
             // 处理每个JSON对象
             for (const jsonData of jsonObjects) {
-              // 提取增量内容
-              const content = this.getNestedValue(jsonData, streamConfig!.contentPath);
-              logService.info(`🎯 提取内容: "${content}"`);
+              // 检查是否有工具调用
+              const toolCalls = this.getNestedValue(jsonData, 'choices[0].delta.tool_calls') || 
+                               this.getNestedValue(jsonData, 'delta.tool_calls');
               
-              if (content) {
-                fullResponse += String(content);
-                logService.info(`📝 累积响应: "${fullResponse}"`);
-                onUpdate(fullResponse, false);
+              if (toolCalls && Array.isArray(toolCalls)) {
+                logService.info(`🔧 检测到工具调用数据: ${JSON.stringify(toolCalls)}`);
+                
+                // 如果是第一次检测到工具调用，立即显示提示信息
+                if (toolCallsAccumulator.length === 0) {
+                  onUpdate('🔧 AI正在调用工具处理您的请求，请稍候...', false);
+                }
+                
+                // 累积工具调用数据
+                for (const toolCall of toolCalls) {
+                  if (toolCall.index !== undefined) {
+                    if (!toolCallsAccumulator[toolCall.index]) {
+                      toolCallsAccumulator[toolCall.index] = {
+                        id: toolCall.id || '',
+                        type: toolCall.type || 'function',
+                        function: {
+                          name: '',
+                          arguments: ''
+                        }
+                      };
+                    }
+                    
+                    if (toolCall.function?.name) {
+                      toolCallsAccumulator[toolCall.index].function.name = toolCall.function.name;
+                      // 更新提示信息，显示具体的工具名称
+                      const toolName = toolCall.function.name;
+                      onUpdate(`🔧 AI正在使用工具 "${toolName}" 处理您的请求，请稍候...`, false);
+                    }
+                    if (toolCall.function?.arguments) {
+                      toolCallsAccumulator[toolCall.index].function.arguments += toolCall.function.arguments;
+                    }
+                  }
+                }
               }
               
-              // 提取推理内容
-              const reasoningPath = streamConfig?.reasoningPath || provider.customConfig?.response.reasoningPath;
-              if (reasoningPath) {
-                const reasoningContent = this.getNestedValue(jsonData, reasoningPath);
-                if (reasoningContent) {
-                  reasoningFullResponse += String(reasoningContent);
-                  onUpdate(fullResponse, false, false, reasoningFullResponse);
+              // 检查是否完成工具调用
+              const finishReason = this.getNestedValue(jsonData, 'choices[0].finish_reason');
+              if (finishReason === 'tool_calls' && toolCallsAccumulator.length > 0) {
+                logService.info(`🔧 工具调用完成，开始处理 ${toolCallsAccumulator.length} 个工具`);
+                isToolCallComplete = true;
+                
+                // 显示工具执行提示
+                const toolNames = toolCallsAccumulator.map(tc => tc.function.name).filter(name => name).join('、');
+                onUpdate(`⚙️ 正在执行工具：${toolNames}...`, false);
+                
+                // 异步处理工具调用
+                (async () => {
+                  try {
+                    const toolResults = await this.handleToolCalls(toolCallsAccumulator);
+                    
+                    // 显示工具执行完成提示
+                    onUpdate(`✅ 工具执行完成，正在生成回复...`, false);
+                    
+                    // 将工具调用结果作为新的消息，重新发送流式请求
+                    // 注意：history已经包含了当前用户消息，所以不需要重复添加message
+                    const newHistory = [...(history || []), 
+                      { role: 'assistant' as const, content: JSON.stringify({ tool_calls: toolCallsAccumulator }) },
+                      { role: 'user' as const, content: `工具调用结果:\n${toolResults}` }
+                    ];
+                    
+                    logService.info('🔄 重新发送流式请求以处理工具调用结果');
+                    
+                    // 创建包装的onUpdate回调，过滤工具调用提示，确保使用一致的状态管理
+                    const wrappedOnUpdate = (content: string, done: boolean, error?: boolean, reasoningContent?: string) => {
+                      // 过滤掉新请求中的工具调用提示，但允许最终完成状态通过
+                      const isNewToolCallMessage = content.includes('🔧') || content.includes('⚙️') || content.includes('✅');
+                      if (!isNewToolCallMessage || done) {
+                        // 转发非工具调用的内容更新，或者最终完成状态
+                        onUpdate(content, done, error, reasoningContent);
+                      }
+                    };
+                    
+                    // 递归调用流式API处理工具调用结果
+                    await this.streamCustomAPI(
+                      '请基于上述工具调用结果回答用户的问题。',
+                      provider,
+                      proxySettings,
+                      wrappedOnUpdate,
+                      abortSignal,
+                      newHistory,
+                      modelId,
+                      temperature
+                    );
+                  } catch (error) {
+                    logService.error('工具调用处理失败', error);
+                    onUpdate(`❌ 工具调用处理失败: ${error}`, true, true);
+                  }
+                })();
+              }
+              
+              // 如果不是工具调用，正常处理内容
+              if (!isToolCallComplete) {
+                // 提取增量内容
+                const content = this.getNestedValue(jsonData, streamConfig!.contentPath);
+                
+                if (content) {
+                  fullResponse += String(content);
+          
+                  onUpdate(fullResponse, false);
+                }
+                
+                // 提取推理内容
+                const reasoningPath = streamConfig?.reasoningPath || provider.customConfig?.response.reasoningPath;
+                if (reasoningPath) {
+                  const reasoningContent = this.getNestedValue(jsonData, reasoningPath);
+                  if (reasoningContent) {
+                    reasoningFullResponse += String(reasoningContent);
+                    onUpdate(fullResponse, false, false, reasoningFullResponse);
+                  }
                 }
               }
             }

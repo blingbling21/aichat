@@ -9,6 +9,7 @@ import {
 } from '../types';
 import { logService } from './log';
 import { storageService } from './storage';
+import { filesystemService } from './filesystem';
 
 /**
  * MCP服务管理器
@@ -24,11 +25,39 @@ class MCPService {
   }
 
   /**
+   * 强制重新加载服务器配置
+   */
+  reloadServerConfigs(): void {
+    // 清空现有配置
+    this.serverConfigs.clear();
+    this.serverStatuses.clear();
+    this.clients.clear();
+    
+    // 重新加载配置
+    this.loadServerConfigs();
+    
+    logService.info('已强制重新加载MCP服务器配置');
+  }
+
+  /**
    * 加载服务器配置
    */
   private loadServerConfigs() {
-    // 从存储中加载配置，如果没有则使用默认配置
-    const configs = storageService.getMCPServerConfigs() || this.getDefaultConfigs();
+    // 从存储中加载配置
+    let configs = storageService.getMCPServerConfigs();
+    
+    logService.info(`从存储中读取到的配置: ${configs ? configs.length : 0} 个`);
+    
+    // 如果没有配置，使用默认配置并保存
+    if (!configs || configs.length === 0) {
+      configs = this.getDefaultConfigs();
+      storageService.saveMCPServerConfigs(configs);
+      logService.info(`首次加载，已保存默认MCP配置: ${configs.length} 个`);
+      
+      // 验证保存是否成功
+      const savedConfigs = storageService.getMCPServerConfigs();
+      logService.info(`验证保存结果: ${savedConfigs ? savedConfigs.length : 0} 个配置`);
+    }
     
     configs.forEach((config: MCPServerConfig) => {
       this.serverConfigs.set(config.id, config);
@@ -36,6 +65,7 @@ class MCPService {
         id: config.id,
         connected: false
       });
+      logService.info(`加载配置: ${config.name} (${config.id}), 启用: ${config.enabled}`);
     });
 
     logService.info(`已加载 ${configs.length} 个MCP服务器配置`);
@@ -45,8 +75,26 @@ class MCPService {
    * 获取默认MCP服务器配置
    */
   private getDefaultConfigs(): MCPServerConfig[] {
-    // 返回空配置，用户需要手动添加MCP服务器
-    return [];
+    // 返回内置的文件系统服务器配置
+    return [
+      {
+        id: 'builtin-filesystem',
+        name: '文件系统服务',
+        description: '内置文件系统操作服务，提供文件读写、目录管理等功能',
+        enabled: true,
+        type: 'builtin',
+        serverClass: 'FilesystemServer',
+        capabilities: {
+          tools: true,
+          resources: false,
+          prompts: false
+        },
+        permissions: {
+          allowToolExecution: true,
+          allowResourceAccess: false
+        }
+      }
+    ];
   }
 
   /**
@@ -161,6 +209,100 @@ class MCPService {
               },
               required: ['path', 'content']
             }
+          },
+          {
+            name: 'list_directory',
+            description: '列出目录内容',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                path: { type: 'string', description: '目录路径' }
+              },
+              required: ['path']
+            }
+          },
+          {
+            name: 'create_directory',
+            description: '创建目录',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                path: { type: 'string', description: '目录路径' }
+              },
+              required: ['path']
+            }
+          },
+          {
+            name: 'delete_file',
+            description: '删除文件',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                path: { type: 'string', description: '文件路径' }
+              },
+              required: ['path']
+            }
+          },
+          {
+            name: 'delete_directory',
+            description: '删除目录',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                path: { type: 'string', description: '目录路径' }
+              },
+              required: ['path']
+            }
+          },
+          {
+            name: 'move_item',
+            description: '移动或重命名文件/目录',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                source: { type: 'string', description: '源路径' },
+                target: { type: 'string', description: '目标路径' }
+              },
+              required: ['source', 'target']
+            }
+          },
+          {
+            name: 'copy_file',
+            description: '复制文件',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                source: { type: 'string', description: '源文件路径' },
+                target: { type: 'string', description: '目标文件路径' }
+              },
+              required: ['source', 'target']
+            }
+          },
+          {
+            name: 'get_item_info',
+            description: '获取文件或目录信息',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                path: { type: 'string', description: '文件或目录路径' }
+              },
+              required: ['path']
+            }
+          },
+          {
+            name: 'search_files',
+            description: '搜索文件',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                path: { type: 'string', description: '搜索目录路径' },
+                pattern: { type: 'string', description: '搜索模式（正则表达式）' },
+                recursive: { type: 'boolean', description: '是否递归搜索' },
+                case_sensitive: { type: 'boolean', description: '是否区分大小写' },
+                file_only: { type: 'boolean', description: '是否只搜索文件' }
+              },
+              required: ['path', 'pattern']
+            }
           }
         ];
         break;
@@ -274,12 +416,94 @@ class MCPService {
    */
   private async executeFileSystemTool(toolName: string, arguments_: Record<string, unknown>): Promise<string> {
     switch (toolName) {
-      case 'read_file':
-        // 模拟文件读取
-        return `文件内容: ${arguments_.path}`;
-      case 'write_file':
-        // 模拟文件写入
-        return `文件已写入: ${arguments_.path}`;
+      case 'read_file': {
+        const path = arguments_.path as string;
+        const content = await filesystemService.readFile(path);
+        return `文件内容已读取，共 ${content.length} 个字符:\n\n${content}`;
+      }
+      
+      case 'write_file': {
+        const path = arguments_.path as string;
+        const content = arguments_.content as string;
+        await filesystemService.writeFile(path, content);
+        return `文件已成功写入: ${path} (${content.length} 个字符)`;
+      }
+      
+      case 'list_directory': {
+        const path = arguments_.path as string;
+        const items = await filesystemService.listDirectory(path);
+        const itemsText = items.map(item => {
+          const sizeText = item.size ? ` (${item.size} bytes)` : '';
+          const modifiedText = item.modified ? ` - 修改时间: ${item.modified.toLocaleString()}` : '';
+          return `${item.type === 'directory' ? '📁' : '📄'} ${item.name}${sizeText}${modifiedText}`;
+        }).join('\n');
+        return `目录内容 (${path}):\n${itemsText || '目录为空'}`;
+      }
+      
+      case 'create_directory': {
+        const path = arguments_.path as string;
+        await filesystemService.createDirectory(path);
+        return `目录已创建: ${path}`;
+      }
+      
+      case 'delete_file': {
+        const path = arguments_.path as string;
+        await filesystemService.deleteFile(path);
+        return `文件已删除: ${path}`;
+      }
+      
+      case 'delete_directory': {
+        const path = arguments_.path as string;
+        await filesystemService.deleteDirectory(path);
+        return `目录已删除: ${path}`;
+      }
+      
+      case 'move_item': {
+        const source = arguments_.source as string;
+        const target = arguments_.target as string;
+        await filesystemService.moveItem(source, target);
+        return `已移动: ${source} -> ${target}`;
+      }
+      
+      case 'copy_file': {
+        const source = arguments_.source as string;
+        const target = arguments_.target as string;
+        await filesystemService.copyFile(source, target);
+        return `文件已复制: ${source} -> ${target}`;
+      }
+      
+      case 'get_item_info': {
+        const path = arguments_.path as string;
+        const info = await filesystemService.getItemInfo(path);
+        return `文件信息 (${path}):\n` +
+               `类型: ${info.type === 'file' ? '文件' : '目录'}\n` +
+               `大小: ${info.size} bytes\n` +
+               `创建时间: ${info.created.toLocaleString()}\n` +
+               `修改时间: ${info.modified.toLocaleString()}\n` +
+               `访问时间: ${info.accessed.toLocaleString()}\n` +
+               `权限: ${info.permissions}`;
+      }
+      
+      case 'search_files': {
+        const path = arguments_.path as string;
+        const pattern = arguments_.pattern as string;
+        const recursive = arguments_.recursive as boolean ?? true;
+        const caseSensitive = arguments_.case_sensitive as boolean ?? false;
+        const fileOnly = arguments_.file_only as boolean ?? true;
+        
+        const results = await filesystemService.searchFiles(path, pattern, {
+          recursive,
+          caseSensitive,
+          fileOnly
+        });
+        
+        if (results.length === 0) {
+          return `未找到匹配的文件 (搜索路径: ${path}, 模式: ${pattern})`;
+        }
+        
+        return `找到 ${results.length} 个匹配的文件:\n${results.join('\n')}`;
+      }
+      
       default:
         throw new Error(`未知的文件系统工具: ${toolName}`);
     }

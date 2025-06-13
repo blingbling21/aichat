@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { MCPServerConfig, MCPServerStatus } from '../types';
 import { mcpService } from '../services/mcp';
 import { logService } from '../services/log';
+import MCPTestButton from './MCPTestButton';
 
 interface MCPSettingsProps {
   onClose?: () => void;
@@ -38,9 +39,22 @@ const MCPSettings: React.FC<MCPSettingsProps> = ({ onClose }) => {
     try {
       setLoading(true);
       
+      // 检查localStorage中的MCP配置
+      const storedConfigs = localStorage.getItem('mcpServerConfigs');
+      logService.info(`设置页面 - localStorage中的MCP配置: ${storedConfigs}`);
+      
+      // 强制重新加载配置
+      mcpService.reloadServerConfigs();
+      
+      // 强制重新初始化MCP服务
+      await mcpService.initializeServers();
+      
       // 获取配置和状态
       const serverConfigs = mcpService.getServerConfigs();
       const serverStatuses = mcpService.getServerStatuses();
+      
+      logService.info(`设置页面 - 获取到 ${serverConfigs.length} 个服务器配置`);
+      logService.info(`设置页面 - 获取到 ${serverStatuses.length} 个服务器状态`);
       
       setConfigs(serverConfigs);
       setStatuses(serverStatuses);
@@ -397,6 +411,9 @@ const MCPSettings: React.FC<MCPSettingsProps> = ({ onClose }) => {
         </CardContent>
       </Card>
 
+      {/* MCP工具测试 */}
+      <MCPTestButton />
+
       {/* 使用说明 */}
       <Card>
         <CardHeader>
@@ -419,11 +436,12 @@ const MCPSettings: React.FC<MCPSettingsProps> = ({ onClose }) => {
             </div>
             
             <div className="bg-green-50 p-3 rounded-lg">
-              <h4 className="font-medium text-green-800 mb-2">📦 推荐的MCP服务器：</h4>
+              <h4 className="font-medium text-green-800 mb-2">📦 可用的MCP服务器：</h4>
               <div className="text-green-700 space-y-1">
-                <p>• <code>npx @modelcontextprotocol/server-filesystem</code> - 文件系统操作</p>
+                <p>• <strong>文件系统服务</strong> - 内置服务，提供文件读写、目录管理等功能</p>
                 <p>• <code>npx @modelcontextprotocol/server-brave-search</code> - 网页搜索</p>
                 <p>• <code>npx @modelcontextprotocol/server-github</code> - GitHub集成</p>
+                <p>• <code>npx @modelcontextprotocol/server-sqlite</code> - SQLite数据库操作</p>
               </div>
             </div>
             

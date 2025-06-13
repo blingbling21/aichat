@@ -25,33 +25,28 @@ export function Markdown({ content, className }: MarkdownProps) {
     // 自定义代码块样式
     // @ts-expect-error - ReactMarkdown类型定义与实际不匹配
     code: ({ className, children, inline, ...props }) => {
-      const language = /language-(\w+)/.exec(className || '');
-      // 将language用作key值，避免警告
-      const key = language ? language[1] : 'text';
       return !inline ? (
-        <div className="not-prose relative" key={key}>
-          <pre className={cn(
-            "rounded-lg p-4 my-3 border overflow-x-auto",
-            "bg-gray-50 border-gray-200 text-gray-900", // 亮色模式
-            "dark:bg-gray-900 dark:border-gray-700 dark:text-gray-100", // 暗色模式
-            "font-mono text-sm leading-relaxed",
+        <pre className={cn(
+          "not-prose relative",
+          "rounded-lg p-4 my-3 border overflow-x-auto",
+          "bg-gray-50 border-gray-200 text-gray-900", // 亮色模式
+          "dark:bg-gray-900 dark:border-gray-700 dark:text-gray-100", // 暗色模式
+          "font-mono text-sm leading-relaxed"
+        )} style={{
+          // 强制覆盖highlight.js的颜色
+          color: 'inherit'
+        }}>
+          <code className={cn(
+            "block w-full",
+            "text-gray-900 dark:text-gray-100", // 确保文字颜色
             className
           )} style={{
-            // 强制覆盖highlight.js的颜色
-            color: 'inherit'
-          }}>
-            <code className={cn(
-              "block w-full",
-              "text-gray-900 dark:text-gray-100", // 确保文字颜色
-              className
-            )} style={{
-              color: 'inherit',
-              background: 'transparent'
-            }} {...props}>
-              {children}
-            </code>
-          </pre>
-        </div>
+            color: 'inherit',
+            background: 'transparent'
+          }} {...props}>
+            {children}
+          </code>
+        </pre>
       ) : (
         <code className={cn(
           "px-2 py-1 rounded text-sm font-mono",
