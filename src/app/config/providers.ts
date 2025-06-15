@@ -1,11 +1,12 @@
+import { AIProvider } from '../types';
+
 export const providerExamples: { [key: string]: AIProvider } = {
   "gemini-pro-streaming": {
     id: "gemini-pro-streaming",
     name: "Google Gemini (流式版本)",
-    type: "custom",
     apiKey: "",
     apiEndpoint: "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent",
-    model: "gemini-pro",
+    models: [{ id: "gemini-pro" }],
     customConfig: {
       method: "POST",
       contentType: "application/json",
@@ -20,8 +21,8 @@ export const providerExamples: { [key: string]: AIProvider } = {
       bodyFields: [
         {
           path: "contents",
-          valueType: "messages",
-          messagesConfig: {
+          valueType: "visual_structure",
+          messageTransform: {
             format: "gemini"
           }
         }
@@ -36,6 +37,7 @@ export const providerExamples: { [key: string]: AIProvider } = {
           }
         },
         response: {
+          format: "sse",
           dataPrefix: "data: ",
           contentPath: "candidates[0].content.parts[0].text",
           finishCondition: "[DONE]"
@@ -50,10 +52,9 @@ export const providerExamples: { [key: string]: AIProvider } = {
   "openai-gpt4-streaming": {
     id: "openai-gpt4-streaming",
     name: "OpenAI GPT-4 (流式版本)",
-    type: "custom", 
     apiKey: "",
     apiEndpoint: "https://api.openai.com/v1/chat/completions",
-    model: "gpt-4",
+    models: [{ id: "gpt-4" }],
     customConfig: {
       method: "POST",
       contentType: "application/json",
@@ -61,7 +62,7 @@ export const providerExamples: { [key: string]: AIProvider } = {
         {
           key: "Authorization",
           value: "Bearer {apiKey}",
-          valueTemplate: "Bearer {apiKey}"
+          valueType: "template"
         }
       ],
       bodyFields: [
@@ -72,8 +73,8 @@ export const providerExamples: { [key: string]: AIProvider } = {
         },
         {
           path: "messages",
-          valueType: "messages",
-          messagesConfig: {
+          valueType: "visual_structure",
+          messageTransform: {
             format: "openai"
           }
         }
@@ -86,6 +87,7 @@ export const providerExamples: { [key: string]: AIProvider } = {
           bodyFieldValue: true
         },
         response: {
+          format: "sse",
           dataPrefix: "data: ",
           contentPath: "choices[0].delta.content",
           reasoningPath: "choices[0].delta.reasoning_content",
@@ -102,10 +104,9 @@ export const providerExamples: { [key: string]: AIProvider } = {
   "custom-api-with-query-streaming": {
     id: "custom-api-streaming",
     name: "自定义API (查询参数流式)",
-    type: "custom",
     apiKey: "",
     apiEndpoint: "https://api.example.com/v1/chat",
-    model: "custom-model",
+    models: [{ id: "custom-model" }],
     customConfig: {
       method: "POST",
       contentType: "application/json",
@@ -113,7 +114,7 @@ export const providerExamples: { [key: string]: AIProvider } = {
         {
           key: "Authorization",
           value: "Bearer {apiKey}",
-          valueTemplate: "Bearer {apiKey}"
+          valueType: "template"
         }
       ],
       bodyFields: [
@@ -136,6 +137,7 @@ export const providerExamples: { [key: string]: AIProvider } = {
           queryParamValue: "true"
         },
         response: {
+          format: "sse",
           dataPrefix: "data: ",
           contentPath: "text",
           finishCondition: "[DONE]"

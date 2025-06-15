@@ -115,7 +115,7 @@ const APIAutoFetchConfig: React.FC<APIAutoFetchConfigProps> = ({
         ...config,
         modelsApi: {
           ...config.modelsApi,
-          headers: [...(config.modelsApi?.headers || []), { key: '', value: '' }]
+          headers: [...(config.modelsApi?.headers || []), { key: '', value: '', valueType: 'static' as const }]
         }
       });
     }

@@ -1,7 +1,7 @@
 import { AIProvider, APIAutoFetchConfig, AIModel, APIHeaderConfig } from '../types';
 import { logService } from './log';
 import { httpService } from './http';
-import { storageService } from './storage';
+import { unifiedStorageService as storageService } from './unified-storage';
 
 /**
  * API自动获取服务
@@ -71,7 +71,7 @@ class APIAutoFetchService {
   ): Promise<Record<string, unknown>> {
     try {
       // 获取代理设置
-      const proxySettings = storageService.getProxySettings();
+      const proxySettings = await storageService.getProxySettings();
       
       // 使用httpService发送请求（支持代理）
       const response = await httpService.sendRequest(endpoint, {

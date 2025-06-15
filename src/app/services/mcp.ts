@@ -8,7 +8,7 @@ import {
   MCPToolResult 
 } from '../types';
 import { logService } from './log';
-import { storageService } from './storage';
+import { unifiedStorageService as storageService } from './unified-storage';
 import { filesystemService } from './filesystem';
 
 /**
@@ -21,20 +21,22 @@ class MCPService {
   private serverStatuses: Map<string, MCPServerStatus> = new Map();
 
   constructor() {
-    this.loadServerConfigs();
+    this.loadServerConfigs().catch(error => {
+      logService.error('加载MCP服务器配置失败', error);
+    });
   }
 
   /**
    * 强制重新加载服务器配置
    */
-  reloadServerConfigs(): void {
+  async reloadServerConfigs(): Promise<void> {
     // 清空现有配置
     this.serverConfigs.clear();
     this.serverStatuses.clear();
     this.clients.clear();
     
     // 重新加载配置
-    this.loadServerConfigs();
+    await this.loadServerConfigs();
     
     logService.info('已强制重新加载MCP服务器配置');
   }
@@ -42,20 +44,20 @@ class MCPService {
   /**
    * 加载服务器配置
    */
-  private loadServerConfigs() {
+  private async loadServerConfigs() {
     // 从存储中加载配置
-    let configs = storageService.getMCPServerConfigs();
+    let configs = await storageService.getMCPServerConfigs() as MCPServerConfig[];
     
     logService.info(`从存储中读取到的配置: ${configs ? configs.length : 0} 个`);
     
     // 如果没有配置，使用默认配置并保存
     if (!configs || configs.length === 0) {
       configs = this.getDefaultConfigs();
-      storageService.saveMCPServerConfigs(configs);
+      await storageService.saveMCPServerConfigs(configs);
       logService.info(`首次加载，已保存默认MCP配置: ${configs.length} 个`);
       
       // 验证保存是否成功
-      const savedConfigs = storageService.getMCPServerConfigs();
+      const savedConfigs = await storageService.getMCPServerConfigs();
       logService.info(`验证保存结果: ${savedConfigs ? savedConfigs.length : 0} 个配置`);
     }
     
@@ -580,7 +582,7 @@ class MCPService {
     
     // 保存到存储
     const configs = Array.from(this.serverConfigs.values());
-    storageService.saveMCPServerConfigs(configs);
+    await storageService.saveMCPServerConfigs(configs);
     
     // 如果服务器已连接，需要重新连接
     if (this.clients.has(config.id)) {
@@ -606,7 +608,7 @@ class MCPService {
     
     // 保存到存储
     const configs = Array.from(this.serverConfigs.values());
-    storageService.saveMCPServerConfigs(configs);
+    await storageService.saveMCPServerConfigs(configs);
   }
 
   /**

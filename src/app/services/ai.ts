@@ -1,5 +1,5 @@
 import { AIProvider, Message, ProxySettings, Agent, SceneParticipant, SceneMessage, Scene, CustomAPIConfig, APIBodyFieldConfig, APIResponseConfig, MessageStructureConfig, JsonNode } from '../types';
-import { storageService } from './storage';
+import { unifiedStorageService as storageService } from './unified-storage';
 import { logService } from './log';
 import { httpService } from './http';
 import { mcpService } from './mcp';
@@ -55,19 +55,49 @@ class AIService {
   }
 
   /**
-   * 获取可用的MCP工具列表，格式化为OpenAI Function Calling格式
+   * 获取可用的MCP工具列表，根据提供商格式化为相应的工具调用格式
    */
-  private getMCPToolsForFunctionCalling() {
+  private getMCPToolsForFunctionCalling(provider?: AIProvider) {
     const mcpTools = mcpService.getAvailableTools();
     
-    return mcpTools.map(tool => ({
-      type: 'function',
-      function: {
-        name: tool.name,
-        description: tool.description,
-        parameters: tool.inputSchema
-      }
-    }));
+    // 判断是否为Gemini格式
+    const isGeminiFormat = this.isGeminiProvider(provider);
+    
+    if (isGeminiFormat) {
+      // Gemini格式：使用function_declarations
+      return [{
+        function_declarations: mcpTools.map(tool => ({
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.inputSchema
+        }))
+      }];
+    } else {
+      // OpenAI/DeepSeek格式：使用type和function
+      return mcpTools.map(tool => ({
+        type: 'function',
+        function: {
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.inputSchema
+        }
+      }));
+    }
+  }
+
+  /**
+   * 判断是否为Gemini提供商
+   */
+  private isGeminiProvider(provider?: AIProvider): boolean {
+    if (!provider) return false;
+    
+    // 通过API端点或模型名称判断是否为Gemini
+    const endpoint = provider.apiEndpoint?.toLowerCase() || '';
+    const hasGeminiModel = provider.models?.some(m => m.id.toLowerCase().includes('gemini')) || false;
+    
+    return endpoint.includes('generativelanguage.googleapis.com') || 
+           endpoint.includes('gemini') ||
+           hasGeminiModel;
   }
 
   /**
@@ -233,8 +263,8 @@ class AIService {
       }
       
       // 获取选中的提供商
-      const id = providerId || storageService.getSelectedProviderId();
-      const providers = storageService.getProviders();
+      const id = providerId || await storageService.getSelectedProviderId();
+      const providers = await storageService.getProviders();
       const provider = providers.find(p => p.id === id);
       
       if (!provider) {
@@ -259,7 +289,7 @@ class AIService {
       }
       
       // 获取代理设置
-      const proxySettings = storageService.getProxySettings();
+      const proxySettings = await storageService.getProxySettings();
       
       // 调用真实的API
       const response = await this.callAIWithReasoning(message, provider, proxySettings, history, actualModelId, false, undefined, temperature);
@@ -315,8 +345,8 @@ class AIService {
     
     try {
       // 获取选中的提供商
-      const id = providerId || storageService.getSelectedProviderId();
-      const providers = storageService.getProviders();
+      const id = providerId || await storageService.getSelectedProviderId();
+      const providers = await storageService.getProviders();
       const provider = providers.find(p => p.id === id);
       
       if (!provider) {
@@ -339,7 +369,7 @@ class AIService {
       }
       
       // 获取代理设置
-      const proxySettings = storageService.getProxySettings();
+      const proxySettings = await storageService.getProxySettings();
       
       // 调用流式API
       await this.streamCallAI(
@@ -511,7 +541,7 @@ class AIService {
       
       // 🔧 添加MCP工具支持
       if (this.mcpInitialized) {
-        const mcpTools = this.getMCPToolsForFunctionCalling();
+        const mcpTools = this.getMCPToolsForFunctionCalling(provider);
         logService.info(`🔧 MCP工具状态: 初始化=${this.mcpInitialized}, 工具数量=${mcpTools.length}`);
         
         if (mcpTools.length > 0) {
@@ -525,6 +555,10 @@ class AIService {
             this.setNestedValue(body, 'tools', mcpTools);
             logService.info(`🔧 自动添加MCP工具: ${mcpTools.length} 个工具`);
             logService.info(`🔧 工具详情: ${JSON.stringify(mcpTools, null, 2)}`);
+            
+            // 记录工具格式类型
+            const isGemini = this.isGeminiProvider(provider);
+            logService.info(`🔧 工具格式: ${isGemini ? 'Gemini (function_declarations)' : 'OpenAI (type + function)'}`);
           } else {
             logService.info(`🔧 已有tools字段配置，跳过自动添加`);
           }
@@ -1105,7 +1139,7 @@ class AIService {
    */
   async testConnection(providerId: string): Promise<{ success: boolean; message: string }> {
     try {
-      const providers = storageService.getProviders();
+      const providers = await storageService.getProviders();
       const provider = providers.find(p => p.id === providerId);
       
       if (!provider) {
@@ -1142,7 +1176,7 @@ class AIService {
         };
       }
       
-      const proxySettings = storageService.getProxySettings();
+      const proxySettings = await storageService.getProxySettings();
       
       // 测试消息
       const testMessage = "这是一条测试消息，请简短回复以验证连接正常。";
@@ -1185,13 +1219,13 @@ class AIService {
   ): Promise<Message | void> {
     try {
       // 获取Agent配置
-      const agent = storageService.getAgent(agentId);
+      const agent = await storageService.getAgent(agentId);
       if (!agent) {
         throw new Error(`找不到Agent ID: ${agentId}`);
       }
 
       // 获取提供商
-      const providers = storageService.getProviders();
+      const providers = await storageService.getProviders();
       const provider = providers.find(p => p.id === agent.providerId);
       
       if (!provider) {
@@ -1199,7 +1233,7 @@ class AIService {
       }
 
       // 获取代理设置
-      const proxySettings = storageService.getProxySettings();
+      const proxySettings = await storageService.getProxySettings();
       
       // 验证模型是否存在
       const modelExists = provider.models.some(m => m.id === agent.modelId);
@@ -1280,8 +1314,8 @@ class AIService {
   /**
    * 获取可用的AI提供商列表
    */
-  getAvailableProviders(): AIProvider[] {
-    return storageService.getProviders();
+  async getAvailableProviders(): Promise<AIProvider[]> {
+    return await storageService.getProviders();
   }
 
   /**
@@ -1297,13 +1331,13 @@ class AIService {
   ): Promise<SceneMessage[]> {
     try {
       // 获取场景信息
-      const scene = storageService.getScene(sceneId);
+      const scene = await storageService.getScene(sceneId);
       if (!scene) {
         throw new Error(`找不到场景: ${sceneId}`);
       }
 
       // 获取场景会话
-      let session = storageService.getSceneSession(sessionId);
+      let session = await storageService.getSceneSession(sessionId);
       if (!session) {
         // 如果会话不存在，创建新会话
         session = {
@@ -1342,7 +1376,7 @@ class AIService {
         // 依次让每个参与者回复
         for (const participant of participants) {
           try {
-            const agent = storageService.getAgent(participant.agentId);
+            const agent = await storageService.getAgent(participant.agentId);
             if (!agent) {
               continue;
             }
@@ -1489,7 +1523,8 @@ class AIService {
   ): Promise<Message> {
     try {
       // 查找提供商和模型
-      const provider = storageService.getProviders().find(p => p.id === agent.providerId);
+      const providers = await storageService.getProviders();
+      const provider = providers.find(p => p.id === agent.providerId);
       if (!provider) {
         throw new Error(`找不到提供商: ${agent.providerId}`);
       }
@@ -1502,7 +1537,7 @@ class AIService {
         throw new Error('没有找到用户消息');
       }
       
-      const proxySettings = storageService.getProxySettings();
+      const proxySettings = await storageService.getProxySettings();
       
       // 准备API请求选项
       const message = lastUserMsg.content;

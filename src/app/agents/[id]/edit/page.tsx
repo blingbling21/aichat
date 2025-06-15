@@ -20,7 +20,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Agent, AIProvider, AIModel } from '../../../types';
-import { storageService } from '../../../services/storage';
+import { storageService } from '../../../services';
 import { logService } from '../../../services/log';
 import { toast } from "sonner";
 import { MainLayout } from '../../../components';
@@ -84,7 +84,7 @@ const AgentEditPage: FC = () => {
     if (!provider || !provider.customConfig) {
       return false;
     }
-    return provider.customConfig.response.streamConfig?.enabled || false;
+    return provider.customConfig.streamConfig?.enabled || false;
   };
 
   // 检查当前提供商是否配置了温度模板字段
@@ -125,38 +125,42 @@ const AgentEditPage: FC = () => {
 
   // 加载数据
   useEffect(() => {
-    // 加载AI提供商
-    const loadedProviders = storageService.getProviders();
-    setProviders(loadedProviders);
-    
-    if (isEditing) {
-      // 编辑模式：加载Agent数据
-      const agent = storageService.getAgent(id);
-      if (agent) {
-        form.reset({
-          name: agent.name,
-          description: agent.description,
-          systemPrompt: agent.systemPrompt,
-          providerId: agent.providerId,
-          modelId: agent.modelId,
-          keepHistory: agent.keepHistory,
-          maxHistoryMessages: agent.maxHistoryMessages || 10,
-          isStreamMode: agent.isStreamMode ?? true,
-          temperature: agent.temperature ?? 0.7,
-        });
+    const loadData = async () => {
+      // 加载AI提供商
+      const loadedProviders = await storageService.getProviders();
+      setProviders(loadedProviders);
+      
+      if (isEditing) {
+        // 编辑模式：加载Agent数据
+        const agent = await storageService.getAgent(id);
+        if (agent) {
+          form.reset({
+            name: agent.name,
+            description: agent.description,
+            systemPrompt: agent.systemPrompt,
+            providerId: agent.providerId,
+            modelId: agent.modelId,
+            keepHistory: agent.keepHistory,
+            maxHistoryMessages: agent.maxHistoryMessages || 10,
+            isStreamMode: agent.isStreamMode ?? true,
+            temperature: agent.temperature ?? 0.7,
+          });
+        } else {
+          toast.error("找不到要编辑的Agent");
+          router.push('/agents');
+        }
       } else {
-        toast.error("找不到要编辑的Agent");
-        router.push('/agents');
-      }
-    } else {
-      // 创建模式：使用默认值
-      if (loadedProviders.length > 0) {
-        form.setValue('providerId', loadedProviders[0].id);
-        if (loadedProviders[0].models.length > 0) {
-          form.setValue('modelId', loadedProviders[0].defaultModelId || loadedProviders[0].models[0].id);
+        // 创建模式：使用默认值
+        if (loadedProviders.length > 0) {
+          form.setValue('providerId', loadedProviders[0].id);
+          if (loadedProviders[0].models.length > 0) {
+            form.setValue('modelId', loadedProviders[0].defaultModelId || loadedProviders[0].models[0].id);
+          }
         }
       }
-    }
+    };
+    
+    loadData();
   }, [isEditing, id, form, router]);
 
   // 提交表单

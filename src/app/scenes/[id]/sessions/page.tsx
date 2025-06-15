@@ -7,7 +7,7 @@ import { Plus, MessageSquare, ArrowLeft, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Scene, SceneSession } from '../../../types';
-import { storageService } from '../../../services/storage';
+import { storageService } from '../../../services';
 import { MainLayout } from '../../../components';
 import { toast } from 'sonner';
 
@@ -21,14 +21,14 @@ const SceneSessionsPage: FC = () => {
 
   useEffect(() => {
     // 加载场景和会话
-    const loadScene = () => {
-      const loadedScene = storageService.getScene(sceneId);
+    const loadScene = async () => {
+      const loadedScene = await storageService.getScene(sceneId);
       if (loadedScene) {
         setScene(loadedScene);
         
         // 加载该场景的会话
-        const loadedSessions = storageService.getSceneSessionsBySceneId(sceneId);
-        setSessions(loadedSessions);
+        const loadedSessions = await storageService.getSceneSessionsBySceneId(sceneId);
+        setSessions(loadedSessions as SceneSession[]);
       } else {
         toast.error("找不到场景");
         router.push('/scenes');
@@ -124,10 +124,9 @@ const SceneSessionsPage: FC = () => {
           <h2 className="text-lg font-semibold mb-2">参与者</h2>
           <div className="flex flex-wrap gap-2">
             {scene.participants.map(participant => {
-              const agent = storageService.getAgent(participant.agentId);
               return (
                 <div key={participant.id} className="px-3 py-1 bg-secondary rounded-full text-sm">
-                  {participant.role} {agent ? `(${agent.name})` : ''}
+                  {participant.role}
                 </div>
               );
             })}

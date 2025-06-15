@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Markdown } from '@/components/ui/markdown';
 import { Scene, SceneSession, SceneMessage } from '../../../../types';
-import { storageService } from '../../../../services/storage';
+import { storageService } from '../../../../services';
 import { aiService } from '../../../../services/ai';
 import { MainLayout } from '../../../../components';
 import { toast } from 'sonner';
@@ -29,8 +29,8 @@ const SceneSessionChatPage: FC = () => {
 
   // 加载场景和会话
   useEffect(() => {
-    const loadData = () => {
-      const loadedScene = storageService.getScene(sceneId);
+    const loadData = async () => {
+      const loadedScene = await storageService.getScene(sceneId);
       if (!loadedScene) {
         toast.error("找不到场景");
         router.push('/scenes');
@@ -38,7 +38,7 @@ const SceneSessionChatPage: FC = () => {
       }
       setScene(loadedScene);
       
-      const loadedSession = storageService.getSceneSession(sessionId);
+      const loadedSession = await storageService.getSceneSession(sessionId);
       if (!loadedSession) {
         toast.error("找不到会话");
         router.push(`/scenes/${sceneId}/sessions`);
@@ -90,7 +90,7 @@ const SceneSessionChatPage: FC = () => {
       );
       
       // 重新加载会话以获取最新消息
-      const updatedSession = storageService.getSceneSession(sessionId);
+      const updatedSession = await storageService.getSceneSession(sessionId);
       if (updatedSession) {
         setSession(updatedSession);
       }
@@ -125,10 +125,10 @@ const SceneSessionChatPage: FC = () => {
     if (scene) {
       const participant = scene.participants.find(p => p.id === participantId);
       if (participant) {
-        const agent = storageService.getAgent(participant.agentId);
+        // 暂时不获取agent信息，避免异步问题
         return { 
           name: participant.role,
-          agentName: agent?.name || '未知Agent',
+          agentName: '加载中...',
           isUser: false 
         };
       }
@@ -229,10 +229,9 @@ const SceneSessionChatPage: FC = () => {
             <h3 className="font-semibold mb-2">参与者</h3>
             <div className="flex flex-wrap gap-2 mb-2">
               {scene.participants.map(participant => {
-                const agent = storageService.getAgent(participant.agentId);
                 return (
                   <div key={participant.id} className="px-3 py-1 bg-secondary rounded-full text-xs">
-                    {participant.role} {agent ? `(${agent.name})` : ''}
+                    {participant.role}
                   </div>
                 );
               })}

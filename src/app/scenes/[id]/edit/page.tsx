@@ -20,7 +20,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Agent, Scene } from '../../../types';
-import { storageService } from '../../../services/storage';
+import { storageService } from '../../../services';
 import { logService } from '../../../services/log';
 import { toast } from "sonner";
 import { MainLayout } from '../../../components';
@@ -89,38 +89,42 @@ const SceneEditPage: FC<SceneEditPageProps> = ({ params, isCreateMode = false })
 
   // 加载数据
   useEffect(() => {
-    // 加载所有可用的Agent
-    const loadedAgents = storageService.getAgents();
-    setAgents(loadedAgents);
-    
-    if (isEditing) {
-      // 编辑模式：加载场景数据
-      const scene = storageService.getScene(id);
-      if (scene) {
-        form.reset({
-          name: scene.name,
-          description: scene.description,
-          scenarioPrompt: scene.scenarioPrompt,
-          participants: scene.participants,
-        });
+    const loadData = async () => {
+      // 加载所有可用的Agent
+      const loadedAgents = await storageService.getAgents();
+      setAgents(loadedAgents);
+      
+      if (isEditing) {
+        // 编辑模式：加载场景数据
+        const scene = await storageService.getScene(id);
+        if (scene) {
+          form.reset({
+            name: scene.name,
+            description: scene.description,
+            scenarioPrompt: scene.scenarioPrompt,
+            participants: scene.participants,
+          });
+        } else {
+          toast.error("找不到要编辑的场景");
+          router.push('/scenes');
+        }
       } else {
-        toast.error("找不到要编辑的场景");
-        router.push('/scenes');
+        // 创建模式：使用默认值
+        if (loadedAgents.length > 0) {
+          // 添加一个默认参与者
+          append({
+            id: Date.now().toString(),
+            agentId: loadedAgents[0].id,
+            role: "",
+            contextPrompt: "",
+            interactionRules: "",
+            order: 0,
+          });
+        }
       }
-    } else {
-      // 创建模式：使用默认值
-      if (loadedAgents.length > 0) {
-        // 添加一个默认参与者
-        append({
-          id: Date.now().toString(),
-          agentId: loadedAgents[0].id,
-          role: "",
-          contextPrompt: "",
-          interactionRules: "",
-          order: 0,
-        });
-      }
-    }
+    };
+    
+    loadData();
   }, [isEditing, id, form, router, append]);
 
   // 添加参与者

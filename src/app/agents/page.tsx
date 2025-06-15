@@ -6,7 +6,7 @@ import { Plus, Edit, Trash2, MessageSquare } from 'lucide-react';
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Agent } from '../types';
-import { storageService } from '../services/storage';
+import { storageService } from '../services';
 import { logService } from '../services/log';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { MainLayout } from '../components';
@@ -18,9 +18,12 @@ const AgentsPage: FC = () => {
 
   // 加载Agent列表
   useEffect(() => {
-    const savedAgents = storageService.getAgents();
-    setAgents(savedAgents);
-    logService.info(`已加载 ${savedAgents.length} 个Agent`);
+    const loadAgents = async () => {
+      const savedAgents = await storageService.getAgents();
+      setAgents(savedAgents);
+      logService.info(`已加载 ${savedAgents.length} 个Agent`);
+    };
+    loadAgents();
   }, []);
 
   // 打开删除确认对话框
@@ -30,10 +33,10 @@ const AgentsPage: FC = () => {
   };
 
   // 删除Agent
-  const handleDeleteAgent = () => {
+  const handleDeleteAgent = async () => {
     if (!agentToDelete) return;
     
-    storageService.deleteAgent(agentToDelete);
+    await storageService.deleteAgent(agentToDelete);
     setAgents(agents.filter(agent => agent.id !== agentToDelete));
     
     setDeleteDialogOpen(false);

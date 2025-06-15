@@ -38,43 +38,83 @@ const BalanceAPIConfig: React.FC<BalanceAPIConfigProps> = ({
     }
   }, [provider]);
 
+  // 监听provider的autoFetchConfig变化，确保配置同步
+  useEffect(() => {
+    if (provider?.autoFetchConfig) {
+      setConfig(provider.autoFetchConfig);
+    }
+  }, [provider?.autoFetchConfig]);
+
+  // 当对话框关闭时清理状态
+  useEffect(() => {
+    if (!open) {
+      setBalanceInfo(null);
+      setShowConfigForm(false);
+    }
+  }, [open]);
+
   // 检查是否已配置API并自动获取余额
   useEffect(() => {
-    if (open && provider && provider.autoFetchConfig?.balanceApi?.enabled) {
-      // 如果已配置，自动获取余额信息
-      fetchBalanceInfo();
-      setShowConfigForm(false);
-    } else if (open && provider) {
-      // 如果未配置，显示配置表单
-      setShowConfigForm(true);
-      setBalanceInfo(null);
-      
-      // 如果没有响应字段配置，自动添加一些默认字段
-      if (!config.balanceApi?.responseFields || config.balanceApi.responseFields.length === 0) {
-        setConfig(prevConfig => ({
-          ...prevConfig,
-          balanceApi: {
-            ...prevConfig.balanceApi,
-            responseFields: [
-              { fieldPath: 'balance_infos[0].total_balance', displayName: '账户余额' },
-              { fieldPath: 'balance_infos[0].currency', displayName: '货币类型' },
-              { fieldPath: 'is_available', displayName: '账户状态' }
-            ]
-          }
-        }));
+    if (open && provider) {
+      if (provider.autoFetchConfig?.balanceApi?.enabled && provider.autoFetchConfig?.balanceApi?.endpoint) {
+        // 如果已配置且有API端点，自动获取余额信息
+        fetchBalanceInfo();
+        setShowConfigForm(false);
+      } else {
+        // 如果未配置或配置不完整，显示配置表单
+        setShowConfigForm(true);
+        setBalanceInfo(null);
+        
+        // 只有在完全没有balanceApi配置的情况下才添加默认字段
+        if (!provider.autoFetchConfig?.balanceApi) {
+          setConfig(prevConfig => ({
+            ...prevConfig,
+            balanceApi: {
+              enabled: false,
+              endpoint: '',
+              method: 'GET',
+              responsePath: '',
+              responseFields: [
+                { fieldPath: 'balance_infos[0].total_balance', displayName: '账户余额' },
+                { fieldPath: 'balance_infos[0].currency', displayName: '货币类型' },
+                { fieldPath: 'is_available', displayName: '账户状态' }
+              ],
+              headers: []
+            }
+          }));
+        }
       }
     }
   }, [open, provider]);
 
   // 获取余额信息
   const fetchBalanceInfo = async () => {
-    if (!provider || !provider.autoFetchConfig?.balanceApi?.enabled) {
+    if (!provider) {
+      return;
+    }
+
+    // 使用当前配置或provider的配置
+    const currentConfig = config.balanceApi?.enabled ? config : provider.autoFetchConfig;
+    
+    if (!currentConfig?.balanceApi?.enabled) {
+      return;
+    }
+
+    if (!currentConfig?.balanceApi?.endpoint) {
+      toast.error('请先配置API端点');
+      setShowConfigForm(true);
       return;
     }
 
     setLoadingBalance(true);
     try {
-      const result = await apiAutoFetchService.fetchBalance(provider);
+      // 使用当前配置创建临时provider对象
+      const tempProvider = {
+        ...provider,
+        autoFetchConfig: currentConfig
+      };
+      
+      const result = await apiAutoFetchService.fetchBalance(tempProvider);
       setBalanceInfo(result);
       logService.info('自动获取账户余额成功');
     } catch (error) {
@@ -101,7 +141,10 @@ const BalanceAPIConfig: React.FC<BalanceAPIConfigProps> = ({
     
     try {
       const testProvider = { ...provider, autoFetchConfig: config };
-      await apiAutoFetchService.fetchBalance(testProvider);
+      const result = await apiAutoFetchService.fetchBalance(testProvider);
+      
+      // 如果测试成功，也更新余额信息显示
+      setBalanceInfo(result);
       
       toast.success('余额API测试成功！');
       logService.info('余额API测试成功');
@@ -121,7 +164,7 @@ const BalanceAPIConfig: React.FC<BalanceAPIConfigProps> = ({
       ...config,
       balanceApi: {
         ...config.balanceApi,
-        headers: [...(config.balanceApi?.headers || []), { key: '', value: '' }]
+        headers: [...(config.balanceApi?.headers || []), { key: '', value: '', valueType: 'static' as const }]
       }
     });
   };
@@ -191,7 +234,7 @@ const BalanceAPIConfig: React.FC<BalanceAPIConfigProps> = ({
   };
 
   // 保存配置
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!provider) return;
 
     const updatedProvider: AIProvider = {
@@ -204,11 +247,23 @@ const BalanceAPIConfig: React.FC<BalanceAPIConfigProps> = ({
     // 保存后返回到余额显示页面，而不是关闭弹出框
     setShowConfigForm(false);
     
-    // 如果启用了余额API，自动获取余额信息
-    if (config.balanceApi?.enabled) {
-      setTimeout(() => {
-        fetchBalanceInfo();
-      }, 100);
+    // 如果启用了余额API且配置了端点，立即获取余额信息
+    if (config.balanceApi?.enabled && config.balanceApi?.endpoint) {
+      setLoadingBalance(true);
+      try {
+        const result = await apiAutoFetchService.fetchBalance(updatedProvider);
+        setBalanceInfo(result);
+        logService.info('配置保存后自动获取账户余额成功');
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : '未知错误';
+        toast.error(`获取账户余额失败: ${errorMsg}`);
+        logService.error('配置保存后自动获取账户余额失败', error);
+      } finally {
+        setLoadingBalance(false);
+      }
+    } else {
+      // 如果配置被禁用或端点被清空，清除余额信息
+      setBalanceInfo(null);
     }
     
     toast.success('账户余额API配置已保存');

@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { Markdown } from "@/components/ui/markdown";
 import { Message, Agent, AgentSession } from '../../../types';
-import { storageService } from '../../../services/storage';
+import { storageService } from '../../../services';
 import { aiService } from '../../../services/ai';
 import { logService } from '../../../services/log';
 import { toast } from "sonner";
@@ -31,39 +31,43 @@ const AgentChatPage: FC = () => {
 
   // 加载Agent和会话
   useEffect(() => {
-    const loadedAgent = storageService.getAgent(agentId);
-    if (!loadedAgent) {
-      toast.error("找不到AI代理");
-      router.push('/agents');
-      return;
-    }
-    
-    setAgent(loadedAgent);
-    
-    // 加载该Agent的所有会话
-    const agentSessions = storageService.getAgentSessionsByAgentId(agentId);
-    setSessions(agentSessions);
-    
-    // 如果有会话，加载最近的一个
-    if (agentSessions.length > 0) {
-      // 按更新时间排序，最新的在前
-      const sortedSessions = [...agentSessions].sort(
-        (a, b) => b.updatedAt.getTime() - a.updatedAt.getTime()
-      );
-      const latestSession = sortedSessions[0];
-      setCurrentSession(latestSession.id);
+    const loadAgentData = async () => {
+      const loadedAgent = await storageService.getAgent(agentId);
+      if (!loadedAgent) {
+        toast.error("找不到AI代理");
+        router.push('/agents');
+        return;
+      }
       
-      // 确保历史消息的streaming状态为false，并过滤掉空内容的消息
-      const cleanedMessages = latestSession.messages
-        .filter(msg => msg.content.trim() !== '' || msg.streaming) // 过滤掉空内容的非流式消息
-        .map(msg => ({
-          ...msg,
-          streaming: false
-        }));
+      setAgent(loadedAgent);
       
-      setMessages(cleanedMessages);
-      logService.info(`已加载会话: ${latestSession.name}`);
-    }
+      // 加载该Agent的所有会话
+      const agentSessions = await storageService.getAgentSessionsByAgentId(agentId);
+      setSessions(agentSessions);
+      
+      // 如果有会话，加载最近的一个
+      if (agentSessions.length > 0) {
+        // 按更新时间排序，最新的在前
+        const sortedSessions = [...agentSessions].sort(
+          (a: AgentSession, b: AgentSession) => b.updatedAt.getTime() - a.updatedAt.getTime()
+        );
+        const latestSession = sortedSessions[0];
+        setCurrentSession(latestSession.id);
+        
+        // 确保历史消息的streaming状态为false，并过滤掉空内容的消息
+        const cleanedMessages = latestSession.messages
+          .filter((msg: Message) => msg.content.trim() !== '' || msg.streaming) // 过滤掉空内容的非流式消息
+          .map((msg: Message) => ({
+            ...msg,
+            streaming: false
+          }));
+        
+        setMessages(cleanedMessages);
+        logService.info(`已加载会话: ${latestSession.name}`);
+      }
+    };
+    
+    loadAgentData();
   }, [agentId, router]);
 
   // 处理发送消息
@@ -110,14 +114,14 @@ const AgentChatPage: FC = () => {
       setSessions(prev => [newSession, ...prev]);
     } else {
       // 更新现有会话
-      const session = storageService.getAgentSession(currentSession);
+      const session = await storageService.getAgentSession(currentSession);
       if (session) {
         const updatedSession = {
           ...session,
           messages: updatedMessages,
           updatedAt: new Date()
         };
-        storageService.saveAgentSession(updatedSession);
+        await storageService.saveAgentSession(updatedSession);
       }
     }
     
@@ -147,7 +151,7 @@ const AgentChatPage: FC = () => {
         input,
         agentId,
         history,
-        (content, done, error) => {
+        async (content, done, error) => {
           setMessages(prevMessages => {
             return prevMessages.map(msg => {
               if (msg.id === assistantMessageId) {
@@ -167,9 +171,9 @@ const AgentChatPage: FC = () => {
             
             // 更新会话
             if (currentSession) {
-              const session = storageService.getAgentSession(currentSession);
+              const session = await storageService.getAgentSession(currentSession);
               if (session) {
-                const finalMessages = session.messages.map(msg => 
+                const finalMessages = session.messages.map((msg: Message) => 
                   msg.id === assistantMessageId 
                     ? { ...msg, content, streaming: false, canceled: error ? true : undefined }
                     : msg
@@ -181,7 +185,7 @@ const AgentChatPage: FC = () => {
                   updatedAt: new Date()
                 };
                 
-                storageService.saveAgentSession(updatedSession);
+                await storageService.saveAgentSession(updatedSession);
               }
             }
           }
@@ -238,15 +242,15 @@ const AgentChatPage: FC = () => {
   };
   
   // 切换会话
-  const handleSwitchSession = (sessionId: string) => {
-    const session = storageService.getAgentSession(sessionId);
+  const handleSwitchSession = async (sessionId: string) => {
+    const session = await storageService.getAgentSession(sessionId);
     if (session) {
       setCurrentSession(sessionId);
       
       // 确保历史消息的streaming状态为false，并过滤掉空内容的消息
       const cleanedMessages = session.messages
-        .filter(msg => msg.content.trim() !== '' || msg.streaming) // 过滤掉空内容的非流式消息
-        .map(msg => ({
+        .filter((msg: Message) => msg.content.trim() !== '' || msg.streaming) // 过滤掉空内容的非流式消息
+        .map((msg: Message) => ({
           ...msg,
           streaming: false
         }));

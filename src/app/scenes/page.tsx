@@ -6,7 +6,7 @@ import { Plus, MessageSquare, Pencil, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Scene } from '../types';
-import { storageService } from '../services/storage';
+import { storageService } from '../services';
 import { MainLayout } from '../components';
 import { toast } from 'sonner';
 
@@ -15,8 +15,8 @@ const ScenesPage: FC = () => {
 
   useEffect(() => {
     // 加载场景列表
-    const loadScenes = () => {
-      const loadedScenes = storageService.getScenes();
+    const loadScenes = async () => {
+      const loadedScenes = await storageService.getScenes();
       setScenes(loadedScenes);
     };
 

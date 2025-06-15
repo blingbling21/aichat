@@ -12,13 +12,21 @@ use reqwest::{Client, Proxy};
 use std::collections::HashMap;
 use std::time::Duration;
 use futures_util::stream::StreamExt;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 // 导入文件系统相关模块
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::io;
 use regex::Regex;
 // chrono用于时间格式化，但实际使用的是std::time
+
+mod database;
+mod storage_service;
+
+use database::Database;
+use storage_service::StorageService;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 /// 代理配置结构体
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -1116,6 +1124,155 @@ fn init_tracing() {
     info!("日志系统初始化完成");
 }
 
+// 全局状态管理
+struct AppState {
+    storage_service: Arc<Mutex<StorageService>>,
+}
+
+// 存储相关的Tauri命令
+
+#[tauri::command]
+async fn storage_get_providers(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    let storage = state.storage_service.lock().await;
+    match storage.get_providers().await {
+        Ok(providers) => Ok(serde_json::to_string(&providers).map_err(|e| e.to_string())?),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+async fn storage_save_provider(state: tauri::State<'_, AppState>, provider_json: String) -> Result<(), String> {
+    let provider: database::AIProvider = serde_json::from_str(&provider_json).map_err(|e| e.to_string())?;
+    let storage = state.storage_service.lock().await;
+    storage.save_provider(&provider).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn storage_delete_provider(state: tauri::State<'_, AppState>, id: String) -> Result<(), String> {
+    let storage = state.storage_service.lock().await;
+    storage.delete_provider(&id).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn storage_get_proxy_settings(state: tauri::State<'_, AppState>) -> Result<Option<String>, String> {
+    let storage = state.storage_service.lock().await;
+    match storage.get_proxy_settings().await {
+        Ok(Some(settings)) => Ok(Some(serde_json::to_string(&settings).map_err(|e| e.to_string())?)),
+        Ok(None) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+async fn storage_save_proxy_settings(state: tauri::State<'_, AppState>, settings_json: String) -> Result<(), String> {
+    let settings: database::ProxySettings = serde_json::from_str(&settings_json).map_err(|e| e.to_string())?;
+    let storage = state.storage_service.lock().await;
+    storage.save_proxy_settings(&settings).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn storage_get_setting(state: tauri::State<'_, AppState>, key: String) -> Result<Option<String>, String> {
+    let storage = state.storage_service.lock().await;
+    storage.get_setting(&key).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn storage_save_setting(state: tauri::State<'_, AppState>, key: String, value: String) -> Result<(), String> {
+    let storage = state.storage_service.lock().await;
+    storage.save_setting(&key, &value).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn storage_get_chat_history(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    let storage = state.storage_service.lock().await;
+    match storage.get_chat_history().await {
+        Ok(messages) => Ok(serde_json::to_string(&messages).map_err(|e| e.to_string())?),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+async fn storage_save_chat_history(state: tauri::State<'_, AppState>, messages_json: String) -> Result<(), String> {
+    let messages: Vec<database::Message> = serde_json::from_str(&messages_json).map_err(|e| e.to_string())?;
+    let storage = state.storage_service.lock().await;
+    storage.save_chat_history(&messages).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn storage_clear_chat_history(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let storage = state.storage_service.lock().await;
+    storage.clear_chat_history().await.map_err(|e| e.to_string())
+}
+
+// Agent相关命令
+#[tauri::command]
+async fn storage_get_agents(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    let storage = state.storage_service.lock().await;
+    match storage.get_agents().await {
+        Ok(agents) => Ok(serde_json::to_string(&agents).map_err(|e| e.to_string())?),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+async fn storage_save_agent(state: tauri::State<'_, AppState>, agent_json: String) -> Result<(), String> {
+    let agent: database::Agent = serde_json::from_str(&agent_json).map_err(|e| e.to_string())?;
+    let storage = state.storage_service.lock().await;
+    storage.save_agent(&agent).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn storage_delete_agent(state: tauri::State<'_, AppState>, id: String) -> Result<(), String> {
+    let storage = state.storage_service.lock().await;
+    storage.delete_agent(&id).await.map_err(|e| e.to_string())
+}
+
+// Scene相关命令
+#[tauri::command]
+async fn storage_get_scenes(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    let storage = state.storage_service.lock().await;
+    match storage.get_scenes().await {
+        Ok(scenes) => Ok(serde_json::to_string(&scenes).map_err(|e| e.to_string())?),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+async fn storage_save_scene(state: tauri::State<'_, AppState>, scene_json: String) -> Result<(), String> {
+    let scene: database::Scene = serde_json::from_str(&scene_json).map_err(|e| e.to_string())?;
+    let storage = state.storage_service.lock().await;
+    storage.save_scene(&scene).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn storage_delete_scene(state: tauri::State<'_, AppState>, id: String) -> Result<(), String> {
+    let storage = state.storage_service.lock().await;
+    storage.delete_scene(&id).await.map_err(|e| e.to_string())
+}
+
+// MCP服务器配置相关命令
+#[tauri::command]
+async fn storage_get_mcp_configs(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    let storage = state.storage_service.lock().await;
+    match storage.get_mcp_server_configs().await {
+        Ok(configs) => Ok(serde_json::to_string(&configs).map_err(|e| e.to_string())?),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+async fn storage_save_mcp_config(state: tauri::State<'_, AppState>, config_json: String) -> Result<(), String> {
+    let config: database::MCPServerConfig = serde_json::from_str(&config_json).map_err(|e| e.to_string())?;
+    let storage = state.storage_service.lock().await;
+    storage.save_mcp_server_config(&config).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn storage_delete_mcp_config(state: tauri::State<'_, AppState>, id: String) -> Result<(), String> {
+    let storage = state.storage_service.lock().await;
+    storage.delete_mcp_server_config(&id).await.map_err(|e| e.to_string())
+}
+
 /// 应用程序入口点
 /// 
 /// 此函数是Tauri应用的主入口点，负责初始化日志系统、
@@ -1131,8 +1288,25 @@ pub fn run() {
     // 创建并配置Tauri应用
     tauri::Builder::default()
         // 设置应用
-        .setup(|_app| {
+        .setup(|app| {
             info!("应用程序设置完成");
+            
+            // 初始化数据库和存储服务
+            let rt = tokio::runtime::Runtime::new().expect("Failed to create async runtime");
+            let storage_service = rt.block_on(async {
+                let db = Database::new().await.expect("Failed to initialize database");
+                StorageService::new(Arc::new(db))
+            });
+            
+            // 创建应用状态
+            let app_state = AppState {
+                storage_service: Arc::new(Mutex::new(storage_service)),
+            };
+            
+            // 管理应用状态
+            app.app_handle().manage(app_state);
+            
+            info!("数据库和存储服务初始化完成");
             Ok(())
         })
         // 注册命令处理器
@@ -1153,7 +1327,26 @@ pub fn run() {
             fs_move_item,
             fs_copy_file,
             fs_get_item_info,
-            fs_search_files
+            fs_search_files,
+            storage_get_providers,
+            storage_save_provider,
+            storage_delete_provider,
+            storage_get_proxy_settings,
+            storage_save_proxy_settings,
+            storage_get_setting,
+            storage_save_setting,
+            storage_get_chat_history,
+            storage_save_chat_history,
+            storage_clear_chat_history,
+            storage_get_agents,
+            storage_save_agent,
+            storage_delete_agent,
+            storage_get_scenes,
+            storage_save_scene,
+            storage_delete_scene,
+            storage_get_mcp_configs,
+            storage_save_mcp_config,
+            storage_delete_mcp_config
         ])
         // 运行应用
         .run(tauri::generate_context!())

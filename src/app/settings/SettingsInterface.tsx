@@ -3,7 +3,7 @@
 import React, { useState, useEffect, FC } from 'react';
 import { Plus, Trash2, Save, Edit, Check, Zap, Loader2, Settings, Wrench, Download, DollarSign } from 'lucide-react';
 import { AIProvider, ProxySettings, AIModel, ModelFeatures } from '../types';
-import { storageService } from '../services/storage';
+import { storageService } from '../services';
 import { aiService } from '../services/ai';
 import { logService } from '../services/log';
 import { Button } from "@/components/ui/button";
@@ -107,38 +107,42 @@ const SettingsInterface: FC = () => {
   
   // 从存储服务加载设置
   useEffect(() => {
-    // 加载AI提供商
-    const savedProviders = storageService.getProviders();
-    if (savedProviders.length > 0) {
-      // 确保所有提供商都有models字段
-      const updatedProviders = savedProviders.map(provider => ({
-        ...provider,
-        models: provider.models || [
-          { id: 'default', name: 'Default Model' }
-        ]
-      }));
-      setProviders(updatedProviders);
-      logService.info(`已加载 ${savedProviders.length} 个AI提供商`);
-    } else {
-      // 设置默认提供商
-      setProviders([{
-        id: '1',
-        name: 'ChatGPT',
-        apiEndpoint: 'https://api.openai.com/v1/chat/completions',
-        apiKey: '',
-        models: [
-          { id: 'gpt-3.5-turbo' },
-          { id: 'gpt-4' }
-        ],
-        defaultModelId: 'gpt-3.5-turbo'
-      }]);
-      logService.info('使用默认AI提供商');
-    }
+    const loadSettings = async () => {
+      // 加载AI提供商
+      const savedProviders = await storageService.getProviders();
+      if (savedProviders.length > 0) {
+        // 确保所有提供商都有models字段
+        const updatedProviders = savedProviders.map(provider => ({
+          ...provider,
+          models: provider.models || [
+            { id: 'default', name: 'Default Model' }
+          ]
+        }));
+        setProviders(updatedProviders);
+        logService.info(`已加载 ${savedProviders.length} 个AI提供商`);
+      } else {
+        // 设置默认提供商
+        setProviders([{
+          id: '1',
+          name: 'ChatGPT',
+          apiEndpoint: 'https://api.openai.com/v1/chat/completions',
+          apiKey: '',
+          models: [
+            { id: 'gpt-3.5-turbo' },
+            { id: 'gpt-4' }
+          ],
+          defaultModelId: 'gpt-3.5-turbo'
+        }]);
+        logService.info('使用默认AI提供商');
+      }
+      
+      // 加载代理设置
+      const savedProxy = await storageService.getProxySettings();
+      setProxySettings(savedProxy);
+      logService.info(`已加载代理设置，代理状态: ${savedProxy.enabled ? '启用' : '禁用'}`);
+    };
     
-    // 加载代理设置
-    const savedProxy = storageService.getProxySettings();
-    setProxySettings(savedProxy);
-    logService.info(`已加载代理设置，代理状态: ${savedProxy.enabled ? '启用' : '禁用'}`);
+    loadSettings();
   }, []);
   
   // 添加新的AI提供商
@@ -522,94 +526,93 @@ const SettingsInterface: FC = () => {
             {providers.map(provider => (
               <Card key={provider.id} className="border">
                 <CardContent className="p-4">
-                  <div className="flex justify-between items-center mb-2">
-                    <div className="flex items-center gap-2 w-full">
+                  <div className="mb-3">
+                    <div className="flex items-center justify-between gap-2 mb-2">
                       {editingProviderId === provider.id ? (
-                        <Input
-                          type="text"
-                          value={provider.name}
-                          onChange={(e) => handleUpdateProvider(provider.id, 'name', e.target.value)}
-                          className="font-medium flex-1"
-                        />
+                        <div className="flex items-center gap-2 flex-1">
+                          <Input
+                            type="text"
+                            value={provider.name}
+                            onChange={(e) => handleUpdateProvider(provider.id, 'name', e.target.value)}
+                            className="font-medium flex-1"
+                          />
+                          <Button 
+                            onClick={() => toggleEditMode(provider.id)}
+                            variant="default"
+                            size="sm"
+                            className="cursor-pointer whitespace-nowrap"
+                          >
+                            <Check size={16} />
+                            <span className="ml-1">保存</span>
+                          </Button>
+                        </div>
                       ) : (
                         <h3 className="font-medium">{provider.name}</h3>
                       )}
                     </div>
-                    <div className="flex items-center gap-2">
-                      {editingProviderId === provider.id ? (
+                    {editingProviderId !== provider.id && (
+                      <div className="flex flex-wrap items-center gap-2 mt-2">
                         <Button 
                           onClick={() => toggleEditMode(provider.id)}
-                          variant="default"
+                          variant="outline"
                           size="sm"
                           className="cursor-pointer"
                         >
-                          <Check size={16} />
-                          <span className="ml-1">保存</span>
+                          <Edit size={16} />
+                          <span className="ml-1">编辑</span>
                         </Button>
-                      ) : (
-                        <>
-                          <Button 
-                            onClick={() => toggleEditMode(provider.id)}
-                            variant="outline"
-                            size="sm"
-                            className="cursor-pointer"
-                          >
-                            <Edit size={16} />
-                            <span className="ml-1">编辑</span>
-                          </Button>
-                          <Button 
-                            onClick={() => openDeleteDialog(provider.id)}
-                            variant="outline"
-                            size="sm"
-                            className="text-destructive cursor-pointer"
-                          >
-                            <Trash2 size={16} />
-                            <span className="ml-1">删除</span>
-                          </Button>
-                          <Button 
-                            onClick={() => handleTestConnection(provider.id)}
-                            variant="outline"
-                            size="sm"
-                            className="text-blue-500 cursor-pointer"
-                            disabled={testingProvider === provider.id || !provider.apiKey}
-                          >
-                            {testingProvider === provider.id ? (
-                              <Loader2 className="h-4 w-4 animate-spin" />
-                            ) : (
-                              <Zap size={16} />
-                            )}
-                            <span className="ml-1">测试</span>
-                          </Button>
-                          <Button 
-                            onClick={() => openModelDialog(provider.id)}
-                            variant="outline"
-                            size="sm"
-                            className="text-green-500 cursor-pointer"
-                          >
-                            <Settings size={16} />
-                            <span className="ml-1">模型</span>
-                          </Button>
-                          <Button 
-                            onClick={() => handlePricingConfig(provider.id)}
-                            variant="outline"
-                            size="sm"
-                            className="text-orange-500 cursor-pointer"
-                          >
-                            <DollarSign size={16} />
-                            <span className="ml-1">余额</span>
-                          </Button>
-                          <Button 
-                            onClick={() => handleAdvancedConfig(provider.id)}
-                            variant="outline"
-                            size="sm"
-                            className="text-purple-500 cursor-pointer"
-                          >
-                            <Wrench size={16} />
-                            <span className="ml-1">高级</span>
-                          </Button>
-                        </>
-                      )}
-                    </div>
+                        <Button 
+                          onClick={() => openDeleteDialog(provider.id)}
+                          variant="outline"
+                          size="sm"
+                          className="text-destructive cursor-pointer"
+                        >
+                          <Trash2 size={16} />
+                          <span className="ml-1">删除</span>
+                        </Button>
+                        <Button 
+                          onClick={() => handleTestConnection(provider.id)}
+                          variant="outline"
+                          size="sm"
+                          className="text-blue-500 cursor-pointer"
+                          disabled={testingProvider === provider.id || !provider.apiKey}
+                        >
+                          {testingProvider === provider.id ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <Zap size={16} />
+                          )}
+                          <span className="ml-1">测试</span>
+                        </Button>
+                        <Button 
+                          onClick={() => openModelDialog(provider.id)}
+                          variant="outline"
+                          size="sm"
+                          className="text-green-500 cursor-pointer"
+                        >
+                          <Settings size={16} />
+                          <span className="ml-1">模型</span>
+                        </Button>
+                        <Button 
+                          onClick={() => handlePricingConfig(provider.id)}
+                          variant="outline"
+                          size="sm"
+                          className="text-orange-500 cursor-pointer"
+                        >
+                          <DollarSign size={16} />
+                          <span className="ml-1">余额</span>
+                        </Button>
+                        <Button 
+                          onClick={() => handleAdvancedConfig(provider.id)}
+                          variant="outline"
+                          size="sm"
+                          className="text-purple-500 cursor-pointer"
+                        >
+                          <Wrench size={16} />
+                          <span className="ml-1">高级</span>
+                        </Button>
+                      </div>
+                    )}
                   </div>
                   
                   <div className="space-y-2">
@@ -693,37 +696,39 @@ const SettingsInterface: FC = () => {
                 />
               </div>
               
-              <div className="space-y-2 mt-4 pt-4 border-t">
-                <Button
-                  onClick={handleAddProvider}
-                  variant="outline"
-                  className="w-full cursor-pointer"
-                >
-                  <Plus size={16} className="mr-1" />
-                  添加提供商
-                </Button>
-                
-                {/* 保存AI提供商设置按钮 */}
-                <Button
-                  onClick={() => {
-                    // 只保存AI提供商设置
-                    storageService.saveProviders(providers);
-                    
-                    // 如果有正在编辑的提供商，退出编辑模式
-                    if (editingProviderId) {
-                      setEditingProviderId(null);
-                    }
-                    
-                    logService.info('AI提供商设置已保存');
-                    logService.debug(`保存了 ${providers.length} 个AI提供商`);
-                    
-                    toast.success('AI提供商设置已保存');
-                  }}
-                  className="w-full cursor-pointer"
-                >
-                  <Save size={16} className="mr-2" />
-                  保存AI提供商设置
-                </Button>
+              <div className="mt-4 pt-4 border-t">
+                <div className="grid grid-cols-2 gap-2">
+                  <Button
+                    onClick={handleAddProvider}
+                    variant="outline"
+                    className="cursor-pointer whitespace-nowrap"
+                  >
+                    <Plus size={16} className="mr-1" />
+                    添加提供商
+                  </Button>
+                  
+                  {/* 保存AI提供商设置按钮 */}
+                  <Button
+                    onClick={() => {
+                      // 只保存AI提供商设置
+                      storageService.saveProviders(providers);
+                      
+                      // 如果有正在编辑的提供商，退出编辑模式
+                      if (editingProviderId) {
+                        setEditingProviderId(null);
+                      }
+                      
+                      logService.info('AI提供商设置已保存');
+                      logService.debug(`保存了 ${providers.length} 个AI提供商`);
+                      
+                      toast.success('AI提供商设置已保存');
+                    }}
+                    className="cursor-pointer whitespace-nowrap"
+                  >
+                    <Save size={16} className="mr-2" />
+                    保存设置
+                  </Button>
+                </div>
               </div>
             </div>
             </CardContent>
@@ -894,9 +899,9 @@ const SettingsInterface: FC = () => {
       
       {/* 模型管理对话框 */}
       <Dialog open={modelDialogOpen} onOpenChange={setModelDialogOpen}>
-        <DialogContent className="sm:max-w-[600px] max-h-[80vh] flex flex-col">
-          <DialogHeader>
-            <DialogTitle className="flex items-center justify-between">
+        <DialogContent className="sm:max-w-[600px] max-h-[85vh] flex flex-col overflow-hidden">
+          <DialogHeader className="flex-shrink-0">
+            <DialogTitle className="flex items-center justify-between pr-8">
               <span>模型管理</span>
               <Button 
                 onClick={() => handleApiAutoFetchConfig(currentProvider)}
@@ -911,25 +916,25 @@ const SettingsInterface: FC = () => {
           </DialogHeader>
           
           {currentProvider && (
-            <div className="flex flex-col min-h-0 flex-1">
-              <div className="space-y-4 my-4 flex-1 min-h-0">
-                <h3 className="font-medium text-sm text-gray-500">现有模型</h3>
+            <div className="flex flex-col min-h-0 flex-1 overflow-hidden">
+              <div className="flex flex-col min-h-0 flex-1 py-4">
+                <h3 className="font-medium text-sm text-gray-500 mb-4 flex-shrink-0">现有模型</h3>
                 
                 {providers.find(p => p.id === currentProvider)?.models.length === 0 ? (
-                  <div className="text-center py-8 text-gray-500">
+                  <div className="text-center py-8 text-gray-500 flex-shrink-0">
                     <div className="text-sm">暂无模型</div>
                     <div className="text-xs mt-1">请在下方添加新模型，或点击右上角的&ldquo;API获取&rdquo;按钮自动获取</div>
                   </div>
                 ) : (
-                  <div className="space-y-3 max-h-80 overflow-y-auto pr-2">
+                  <div className="space-y-3 overflow-y-auto flex-1 min-h-0 pr-2">
                     {providers.find(p => p.id === currentProvider)?.models.map(model => (
-                      <div key={model.id} className="p-3 border rounded-md space-y-3">
+                      <div key={model.id} className="p-3 border rounded-md space-y-2">
                         <div className="flex items-center justify-between">
-                          <div>
-                            <div className="font-medium">{model.id}</div>
+                          <div className="flex-1 min-w-0">
+                            <div className="font-medium truncate">{model.id}</div>
                             <div className="text-xs text-gray-500">ID: {model.id}</div>
                           </div>
-                          <div className="flex gap-2 items-center">
+                          <div className="flex gap-2 items-center flex-shrink-0">
                             {providers.find(p => p.id === currentProvider)?.defaultModelId === model.id ? (
                               <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded-full">默认</span>
                             ) : (
@@ -952,50 +957,50 @@ const SettingsInterface: FC = () => {
                           </div>
                         </div>
                         
-                        <div className="border-t pt-3">
-                          <div className="mb-2 flex justify-between items-center">
+                        <div className="border-t pt-2">
+                          <div className="flex items-center justify-between mb-2">
                             <h4 className="text-sm font-medium">支持的功能</h4>
-                          </div>
-                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                            <div className="flex items-center space-x-2">
-                              <Checkbox 
-                                id={`reasoning-${model.id}`}
-                                checked={model.features?.reasoning || false}
-                                onCheckedChange={(checked) => 
-                                  handleFeatureChange(currentProvider, model.id, 'reasoning', checked === true)
-                                }
-                              />
-                              <Label htmlFor={`reasoning-${model.id}`} className="text-sm">推理</Label>
-                            </div>
-                            <div className="flex items-center space-x-2">
-                              <Checkbox 
-                                id={`image-${model.id}`}
-                                checked={model.features?.image || false}
-                                onCheckedChange={(checked) => 
-                                  handleFeatureChange(currentProvider, model.id, 'image', checked === true)
-                                }
-                              />
-                              <Label htmlFor={`image-${model.id}`} className="text-sm">图片</Label>
-                            </div>
-                            <div className="flex items-center space-x-2">
-                              <Checkbox 
-                                id={`video-${model.id}`}
-                                checked={model.features?.video || false}
-                                onCheckedChange={(checked) => 
-                                  handleFeatureChange(currentProvider, model.id, 'video', checked === true)
-                                }
-                              />
-                              <Label htmlFor={`video-${model.id}`} className="text-sm">视频</Label>
-                            </div>
-                            <div className="flex items-center space-x-2">
-                              <Checkbox 
-                                id={`voice-${model.id}`}
-                                checked={model.features?.voice || false}
-                                onCheckedChange={(checked) => 
-                                  handleFeatureChange(currentProvider, model.id, 'voice', checked === true)
-                                }
-                              />
-                              <Label htmlFor={`voice-${model.id}`} className="text-sm">语音</Label>
+                            <div className="flex items-center gap-4">
+                              <div className="flex items-center space-x-1">
+                                <Checkbox 
+                                  id={`reasoning-${model.id}`}
+                                  checked={model.features?.reasoning || false}
+                                  onCheckedChange={(checked) => 
+                                    handleFeatureChange(currentProvider, model.id, 'reasoning', checked === true)
+                                  }
+                                />
+                                <Label htmlFor={`reasoning-${model.id}`} className="text-xs">推理</Label>
+                              </div>
+                              <div className="flex items-center space-x-1">
+                                <Checkbox 
+                                  id={`image-${model.id}`}
+                                  checked={model.features?.image || false}
+                                  onCheckedChange={(checked) => 
+                                    handleFeatureChange(currentProvider, model.id, 'image', checked === true)
+                                  }
+                                />
+                                <Label htmlFor={`image-${model.id}`} className="text-xs">图片</Label>
+                              </div>
+                              <div className="flex items-center space-x-1">
+                                <Checkbox 
+                                  id={`video-${model.id}`}
+                                  checked={model.features?.video || false}
+                                  onCheckedChange={(checked) => 
+                                    handleFeatureChange(currentProvider, model.id, 'video', checked === true)
+                                  }
+                                />
+                                <Label htmlFor={`video-${model.id}`} className="text-xs">视频</Label>
+                              </div>
+                              <div className="flex items-center space-x-1">
+                                <Checkbox 
+                                  id={`voice-${model.id}`}
+                                  checked={model.features?.voice || false}
+                                  onCheckedChange={(checked) => 
+                                    handleFeatureChange(currentProvider, model.id, 'voice', checked === true)
+                                  }
+                                />
+                                <Label htmlFor={`voice-${model.id}`} className="text-xs">语音</Label>
+                              </div>
                             </div>
                           </div>
                         </div>
@@ -1005,23 +1010,25 @@ const SettingsInterface: FC = () => {
                 )}
               </div>
               
-              <div className="border-t pt-4 flex-shrink-0">
-                <h3 className="font-medium text-sm text-gray-500 mb-2">添加新模型</h3>
+              <div className="border-t pt-3 flex-shrink-0 bg-white">
+                <h3 className="font-medium text-sm text-gray-500 mb-3">添加新模型</h3>
                 <div className="space-y-3">
-                  <div>
-                    <Label htmlFor="new-model-id" className="block mb-1">模型ID</Label>
-                    <Input
-                      id="new-model-id"
-                      value={newModel.id}
-                      onChange={(e) => setNewModel({ ...newModel, id: e.target.value })}
-                      placeholder="例如: deepseek-chat, gpt-4, claude-3-sonnet-20240229"
-                      className="mb-3"
-                    />
+                  <div className="flex flex-col gap-3">
+                    <div className="flex items-center gap-3">
+                      <Label htmlFor="new-model-id" className="text-sm font-medium whitespace-nowrap">模型ID</Label>
+                      <Input
+                        id="new-model-id"
+                        value={newModel.id}
+                        onChange={(e) => setNewModel({ ...newModel, id: e.target.value })}
+                        placeholder="例如: deepseek-chat, gpt-4, claude-3-sonnet-20240229"
+                        className="flex-1"
+                      />
+                    </div>
                     
-                    <div className="mb-2">
-                      <h4 className="text-sm font-medium mb-1">支持的功能</h4>
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                        <div className="flex items-center space-x-2">
+                    <div className="flex items-center gap-3">
+                      <Label className="text-sm font-medium whitespace-nowrap">支持的功能</Label>
+                      <div className="flex items-center gap-4 flex-1">
+                        <div className="flex items-center space-x-1">
                           <Checkbox 
                             id="new-reasoning"
                             checked={newModel.features?.reasoning || false}
@@ -1035,9 +1042,9 @@ const SettingsInterface: FC = () => {
                               })
                             }
                           />
-                          <Label htmlFor="new-reasoning" className="text-sm">推理</Label>
+                          <Label htmlFor="new-reasoning" className="text-xs">推理</Label>
                         </div>
-                        <div className="flex items-center space-x-2">
+                        <div className="flex items-center space-x-1">
                           <Checkbox 
                             id="new-image"
                             checked={newModel.features?.image || false}
@@ -1051,9 +1058,9 @@ const SettingsInterface: FC = () => {
                               })
                             }
                           />
-                          <Label htmlFor="new-image" className="text-sm">图片</Label>
+                          <Label htmlFor="new-image" className="text-xs">图片</Label>
                         </div>
-                        <div className="flex items-center space-x-2">
+                        <div className="flex items-center space-x-1">
                           <Checkbox 
                             id="new-video"
                             checked={newModel.features?.video || false}
@@ -1067,9 +1074,9 @@ const SettingsInterface: FC = () => {
                               })
                             }
                           />
-                          <Label htmlFor="new-video" className="text-sm">视频</Label>
+                          <Label htmlFor="new-video" className="text-xs">视频</Label>
                         </div>
-                        <div className="flex items-center space-x-2">
+                        <div className="flex items-center space-x-1">
                           <Checkbox 
                             id="new-voice"
                             checked={newModel.features?.voice || false}
@@ -1083,7 +1090,7 @@ const SettingsInterface: FC = () => {
                               })
                             }
                           />
-                          <Label htmlFor="new-voice" className="text-sm">语音</Label>
+                          <Label htmlFor="new-voice" className="text-xs">语音</Label>
                         </div>
                       </div>
                     </div>

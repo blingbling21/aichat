@@ -4,7 +4,7 @@ import { FC, useState, useRef, useEffect } from 'react';
 import { Send, Loader2, Square, Image, Video, Mic, Brain } from 'lucide-react';
 import { Message, AIProvider, AIModel } from '../types';
 import { aiService } from '../services/ai';
-import { storageService } from '../services/storage';
+import { storageService } from '../services';
 import { logService } from '../services/log';
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
@@ -76,108 +76,112 @@ const ChatInterface: FC = () => {
 
   // 加载本地存储的数据，确保在客户端执行
   useEffect(() => {
-    // 加载流式模式设置
-    try {
-      const savedStreamMode = storageService.getStreamMode();
-      setIsStreamMode(savedStreamMode);
-      logService.info(`已加载流式模式设置: ${savedStreamMode}`);
-    } catch (error) {
-      console.error('加载流式模式设置失败:', error);
-      logService.error('加载流式模式设置失败', error);
-    }
-    
-    // 加载聊天历史
-    try {
-      const savedMessages = localStorage.getItem('chatHistory');
-      if (savedMessages) {
-        const parsedMessages = JSON.parse(savedMessages);
-        // 确保timestamp是Date对象，清除streaming状态，并过滤掉空内容的消息
-        setMessages(parsedMessages
-          .filter((msg: Omit<Message, 'timestamp'> & { timestamp: string }) => msg.content && msg.content.trim() !== '') // 过滤掉空内容的消息
-          .map((msg: Omit<Message, 'timestamp'> & { timestamp: string }) => ({
-            ...msg,
-            timestamp: new Date(msg.timestamp),
-            streaming: false // 确保历史消息不显示为正在生成状态
-          })));
-        logService.info(`已加载 ${parsedMessages.length} 条聊天历史记录`);
-      } else {
-        logService.info('没有找到聊天历史记录');
-      }
-    } catch (error) {
-      console.error('加载聊天历史失败:', error);
-      logService.error('加载聊天历史失败', error);
-    }
-    
-    // 加载AI提供商列表
-    const providers = aiService.getAvailableProviders();
-    if (providers.length > 0) {
-      setAiProviders(providers);
-      
-      // 加载选择的提供商ID
+    const loadSettings = async () => {
+      // 加载流式模式设置
       try {
-        const savedProviderId = storageService.getSelectedProviderId();
-        if (savedProviderId && providers.some(p => p.id === savedProviderId)) {
-          setSelectedProvider(savedProviderId);
-          logService.info(`已加载选中的提供商ID: ${savedProviderId}`);
-          
-          // 获取该提供商的模型列表
-          const selectedProviderData = providers.find(p => p.id === savedProviderId);
-          if (selectedProviderData) {
-            setAvailableModels(selectedProviderData.models || []);
-            
-            // 尝试加载保存的模型ID
-            const savedModelId = storageService.getSelectedModelId();
-            const modelExists = selectedProviderData.models.some(m => m.id === savedModelId);
-            
-            if (savedModelId && modelExists) {
-              // 如果有保存的模型ID并且该模型存在于当前提供商，使用保存的模型
-              setSelectedModel(savedModelId);
-              logService.info(`已恢复选中的模型ID: ${savedModelId}`);
-            } else if (selectedProviderData.defaultModelId) {
-              // 否则使用默认模型
-              setSelectedModel(selectedProviderData.defaultModelId);
-            } else if (selectedProviderData.models && selectedProviderData.models.length > 0) {
-              setSelectedModel(selectedProviderData.models[0].id);
-            }
-          }
-        } else if (providers.length > 0) {
-          // 如果没有保存的提供商ID或提供商不存在，使用第一个提供商
-          setSelectedProvider(providers[0].id);
-          
-          // 获取第一个提供商的模型列表
-          setAvailableModels(providers[0].models || []);
-          
-          // 设置默认选中的模型
-          if (providers[0].defaultModelId) {
-            setSelectedModel(providers[0].defaultModelId);
-          } else if (providers[0].models && providers[0].models.length > 0) {
-            setSelectedModel(providers[0].models[0].id);
-          }
+        const savedStreamMode = await storageService.getStreamMode();
+        setIsStreamMode(savedStreamMode);
+        logService.info(`已加载流式模式设置: ${savedStreamMode}`);
+      } catch (error) {
+        console.error('加载流式模式设置失败:', error);
+        logService.error('加载流式模式设置失败', error);
+      }
+      
+      // 加载聊天历史
+      try {
+        const savedMessages = localStorage.getItem('chatHistory');
+        if (savedMessages) {
+          const parsedMessages = JSON.parse(savedMessages);
+          // 确保timestamp是Date对象，清除streaming状态，并过滤掉空内容的消息
+          setMessages(parsedMessages
+            .filter((msg: Omit<Message, 'timestamp'> & { timestamp: string }) => msg.content && msg.content.trim() !== '') // 过滤掉空内容的消息
+            .map((msg: Omit<Message, 'timestamp'> & { timestamp: string }) => ({
+              ...msg,
+              timestamp: new Date(msg.timestamp),
+              streaming: false // 确保历史消息不显示为正在生成状态
+            })));
+          logService.info(`已加载 ${parsedMessages.length} 条聊天历史记录`);
+        } else {
+          logService.info('没有找到聊天历史记录');
         }
       } catch (error) {
-        console.error('加载选中提供商ID失败:', error);
-        logService.error('加载选中提供商ID失败', error);
+        console.error('加载聊天历史失败:', error);
+        logService.error('加载聊天历史失败', error);
       }
       
-      logService.info(`已加载 ${providers.length} 个AI提供商`);
-    } else {
-      // 默认提供商
-      const defaultProvider = {
-        id: 'default',
-        name: 'ChatGPT',
-        apiEndpoint: 'https://api.openai.com/v1/chat/completions',
-        apiKey: '',
-        models: [
-          { id: 'gpt-3.5-turbo', name: 'GPT-3.5 Turbo' }
-        ],
-        defaultModelId: 'gpt-3.5-turbo'
-      };
-      setAiProviders([defaultProvider]);
-      setSelectedProvider(defaultProvider.id);
-      setAvailableModels(defaultProvider.models);
-      setSelectedModel(defaultProvider.defaultModelId || defaultProvider.models[0].id);
-      logService.info('使用默认AI提供商');
-    }
+      // 加载AI提供商列表
+      const providers = await aiService.getAvailableProviders();
+      if (providers.length > 0) {
+        setAiProviders(providers);
+        
+        // 加载选择的提供商ID
+        try {
+          const savedProviderId = await storageService.getSelectedProviderId();
+          if (savedProviderId && providers.some((p: AIProvider) => p.id === savedProviderId)) {
+            setSelectedProvider(savedProviderId);
+            logService.info(`已加载选中的提供商ID: ${savedProviderId}`);
+            
+            // 获取该提供商的模型列表
+            const selectedProviderData = providers.find((p: AIProvider) => p.id === savedProviderId);
+            if (selectedProviderData) {
+              setAvailableModels(selectedProviderData.models || []);
+              
+              // 尝试加载保存的模型ID
+              const savedModelId = await storageService.getSelectedModelId();
+              const modelExists = selectedProviderData.models.some((m: AIModel) => m.id === savedModelId);
+              
+              if (savedModelId && modelExists) {
+                // 如果有保存的模型ID并且该模型存在于当前提供商，使用保存的模型
+                setSelectedModel(savedModelId);
+                logService.info(`已恢复选中的模型ID: ${savedModelId}`);
+              } else if (selectedProviderData.defaultModelId) {
+                // 否则使用默认模型
+                setSelectedModel(selectedProviderData.defaultModelId);
+              } else if (selectedProviderData.models && selectedProviderData.models.length > 0) {
+                setSelectedModel(selectedProviderData.models[0].id);
+              }
+            }
+          } else if (providers.length > 0) {
+            // 如果没有保存的提供商ID或提供商不存在，使用第一个提供商
+            setSelectedProvider(providers[0].id);
+            
+            // 获取第一个提供商的模型列表
+            setAvailableModels(providers[0].models || []);
+            
+            // 设置默认选中的模型
+            if (providers[0].defaultModelId) {
+              setSelectedModel(providers[0].defaultModelId);
+            } else if (providers[0].models && providers[0].models.length > 0) {
+              setSelectedModel(providers[0].models[0].id);
+            }
+          }
+        } catch (error) {
+          console.error('加载选中提供商ID失败:', error);
+          logService.error('加载选中提供商ID失败', error);
+        }
+        
+        logService.info(`已加载 ${providers.length} 个AI提供商`);
+      } else {
+        // 默认提供商
+        const defaultProvider = {
+          id: 'default',
+          name: 'ChatGPT',
+          apiEndpoint: 'https://api.openai.com/v1/chat/completions',
+          apiKey: '',
+          models: [
+            { id: 'gpt-3.5-turbo', name: 'GPT-3.5 Turbo' }
+          ],
+          defaultModelId: 'gpt-3.5-turbo'
+        };
+        setAiProviders([defaultProvider]);
+        setSelectedProvider(defaultProvider.id);
+        setAvailableModels(defaultProvider.models);
+        setSelectedModel(defaultProvider.defaultModelId || defaultProvider.models[0].id);
+        logService.info('使用默认AI提供商');
+      }
+    };
+    
+    loadSettings();
   }, []);
   
   // 监听提供商变化，更新模型列表
